@@ -1,19 +1,18 @@
-from fastapi import FastAPI, UploadFile, File
-import shutil
-import os
+from fastapi import Depends, FastAPI, File, UploadFile
+from sqlalchemy.orm import Session
 import fitz
 
+from .database import engine, get_db
+from .models import Base
+from .services import save_document
+
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title="Briefkasten AI",
     description="AI assistant for German documents",
     version="0.1.0"
 )
-
-
-UPLOAD_FOLDER = "uploads"
-
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 
 @app.get("/")
@@ -24,18 +23,11 @@ def home():
 
 
 @app.post("/upload")
-async def upload_document(file: UploadFile = File(...)):
-
-    file_path = os.path.join(
-        UPLOAD_FOLDER,
-        file.filename
-    )
-
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(
-            file.file,
-            buffer
-        )
+async def upload_document(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    save_document(file, db)
 
     return {
         "filename": file.filename,
@@ -63,3 +55,4 @@ def analyze_document(filename: str):
         "characters": len(text),
         "text": text[:1000]
     }
+

@@ -8,7 +8,7 @@ class Document(Base):
     __tablename__ = "documents"
 
     id = Column(Integer, primary_key=True, index=True)
-    filename = Column(String, unique=True, index=True, nullable=False)
+    filename = Column(String, index=True, nullable=False)
     filepath = Column(String, nullable=False)
     uploaded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     status = Column(String, default="uploaded", nullable=False)
