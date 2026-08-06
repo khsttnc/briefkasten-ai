@@ -1,2 +1,3 @@
-uploads/
 backend/uploads/
+__pycache__/
+*.pyc
