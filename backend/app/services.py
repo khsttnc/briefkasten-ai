@@ -55,9 +55,15 @@ def analyze_document(filename: str, db: Session) -> dict:
     for page in doc:
         text += page.get_text()
 
-    document.text = text
-    document.character_count = len(text)
-    document.status = "analyzed"
+    meaningful_text = text.strip()
+    if meaningful_text:
+        document.text = text
+        document.character_count = len(text)
+        document.status = "analyzed"
+    else:
+        document.text = ""
+        document.character_count = 0
+        document.status = "ocr_required"
 
     db.add(document)
     db.commit()
