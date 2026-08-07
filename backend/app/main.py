@@ -1,10 +1,9 @@
 from fastapi import Depends, FastAPI, File, UploadFile
 from sqlalchemy.orm import Session
-import fitz
 
 from .database import engine, get_db
 from .models import Base
-from .services import save_document
+from .services import analyze_document, save_document
 
 Base.metadata.create_all(bind=engine)
 
@@ -36,23 +35,9 @@ async def upload_document(
 
 
 @app.get("/analyze/{filename}")
-def analyze_document(filename: str):
-
-    file_path = os.path.join(
-        UPLOAD_FOLDER,
-        filename
-    )
-
-    doc = fitz.open(file_path)
-
-    text = ""
-
-    for page in doc:
-        text += page.get_text()
-
-    return {
-        "filename": filename,
-        "characters": len(text),
-        "text": text[:1000]
-    }
+def analyze_document_route(
+    filename: str,
+    db: Session = Depends(get_db),
+):
+    return analyze_document(filename, db)
 
