@@ -1,5 +1,7 @@
+import json
 import os
 import shutil
+from datetime import datetime
 from fastapi import UploadFile, HTTPException
 from sqlalchemy.orm import Session
 import fitz
@@ -8,7 +10,9 @@ import pytesseract
 
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
-from .models import Document
+from .ai_service import AIService
+from .models import Document, DocumentAIAnalysis
+from .providers.claude_provider import ClaudeProvider
 
 UPLOAD_FOLDER = "uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -114,3 +118,79 @@ def analyze_document_by_id(document_id: int, db: Session) -> dict:
         raise HTTPException(status_code=404, detail="Document not found")
 
     return _ensure_document_analyzed(document, db)
+
+
+def analyze_document_ai_by_id(document_id: int, db: Session) -> dict:
+    document = db.query(Document).filter(Document.id == document_id).first()
+
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    if not document.text or not document.text.strip():
+        _ensure_document_analyzed(document, db)
+
+    try:
+        provider = ClaudeProvider()
+    except Exception as exc:
+        analysis_record = DocumentAIAnalysis(
+            document_id=document.id,
+            provider="anthropic",
+            model=os.getenv("ANTHROPIC_MODEL", "claude-3.5-mini"),
+            status="failed",
+            raw_response=json.dumps({}),
+            error_message=str(exc),
+            completed_at=datetime.utcnow(),
+        )
+        db.add(analysis_record)
+        db.commit()
+        db.refresh(analysis_record)
+
+        raise HTTPException(status_code=503, detail="Claude provider is not configured.")
+
+    ai_service = AIService(provider)
+    analysis_result = ai_service.analyze(document.text or "")
+
+    status = "failed" if analysis_result.error_message else "completed"
+    raw_response = analysis_result.raw_response or {}
+    if not isinstance(raw_response, dict):
+        raw_response = {"raw_response": raw_response}
+
+    analysis_record = DocumentAIAnalysis(
+        document_id=document.id,
+        provider=provider.provider_name,
+        model=provider.model_name,
+        status=status,
+        document_type=analysis_result.document_type,
+        language=analysis_result.language,
+        summary=analysis_result.summary,
+        turkish_explanation=analysis_result.turkish_explanation,
+        important_dates=json.dumps(analysis_result.important_dates or []),
+        extracted_entities=json.dumps(analysis_result.extracted_entities or []),
+        raw_response=json.dumps(raw_response),
+        error_message=analysis_result.error_message,
+        completed_at=datetime.utcnow(),
+    )
+
+    db.add(analysis_record)
+    db.commit()
+    db.refresh(analysis_record)
+
+    response = {
+        "analysis_id": analysis_record.id,
+        "document_id": analysis_record.document_id,
+        "provider": analysis_record.provider,
+        "model": analysis_record.model,
+        "status": analysis_record.status,
+        "document_type": analysis_record.document_type,
+        "language": analysis_record.language,
+        "summary": analysis_record.summary,
+        "turkish_explanation": analysis_record.turkish_explanation,
+        "important_dates": analysis_result.important_dates or [],
+        "extracted_entities": analysis_result.extracted_entities or [],
+        "error_message": analysis_record.error_message,
+    }
+
+    if analysis_result.error_message:
+        raise HTTPException(status_code=502, detail=analysis_result.error_message)
+
+    return response
