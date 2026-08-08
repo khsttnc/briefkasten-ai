@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from .database import engine, get_db
 from .models import Base
-from .services import analyze_document, save_document
+from .services import analyze_document, analyze_document_by_id, save_document
 
 Base.metadata.create_all(bind=engine)
 
@@ -26,12 +26,21 @@ async def upload_document(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
-    save_document(file, db)
+    document = save_document(file, db)
 
     return {
+        "id": document.id,
         "filename": file.filename,
         "status": "uploaded"
     }
+
+
+@app.get("/analyze/id/{document_id}")
+def analyze_document_by_id_route(
+    document_id: int,
+    db: Session = Depends(get_db),
+):
+    return analyze_document_by_id(document_id, db)
 
 
 @app.get("/analyze/{filename}")
