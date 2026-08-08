@@ -49,20 +49,10 @@ def extract_text_with_ocr(filepath: str) -> str:
     return "\n".join(pages_text)
 
 
-def analyze_document(filename: str, db: Session) -> dict:
-    document = (
-        db.query(Document)
-        .filter(Document.filename == filename)
-        .order_by(Document.id.desc())
-        .first()
-    )
-
-    if document is None:
-        raise HTTPException(status_code=404, detail="Document not found")
-
+def _ensure_document_analyzed(document: Document, db: Session) -> dict:
     if document.status == "analyzed" and document.text is not None and document.character_count is not None:
         return {
-            "filename": filename,
+            "filename": document.filename,
             "characters": document.character_count,
             "text": document.text[:1000],
         }
@@ -97,7 +87,30 @@ def analyze_document(filename: str, db: Session) -> dict:
     db.refresh(document)
 
     return {
-        "filename": filename,
+        "filename": document.filename,
         "characters": document.character_count,
         "text": document.text[:1000],
     }
+
+
+def analyze_document(filename: str, db: Session) -> dict:
+    document = (
+        db.query(Document)
+        .filter(Document.filename == filename)
+        .order_by(Document.id.desc())
+        .first()
+    )
+
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    return _ensure_document_analyzed(document, db)
+
+
+def analyze_document_by_id(document_id: int, db: Session) -> dict:
+    document = db.query(Document).filter(Document.id == document_id).first()
+
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    return _ensure_document_analyzed(document, db)
