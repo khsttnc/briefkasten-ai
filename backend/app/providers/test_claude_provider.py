@@ -2,8 +2,8 @@ import json
 import unittest
 from unittest.mock import patch
 
-from app.ai_service import AIAnalysisResult
-from app.providers.claude_provider import ClaudeProvider, _build_claude_prompt, _load_json_safe
+from ..ai_service import AIAnalysisResult
+from .claude_provider import ClaudeProvider, _build_claude_prompt, _load_json_safe
 
 
 class DummyResponse:
@@ -27,7 +27,7 @@ class TestClaudeProvider(unittest.TestCase):
     def test_load_json_safe_invalid(self):
         self.assertIsNone(_load_json_safe('not json'))
 
-    @patch('app.providers.claude_provider.Anthropic')
+    @patch('backend.app.providers.claude_provider.Anthropic')
     @patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'})
     def test_claude_provider_parses_response(self, mock_anthropic):
         returned_text = '{"document_type": "invoice", "language": "de", "summary": "Özet", "turkish_explanation": "Açıklama", "important_dates": ["2026-08-08"], "extracted_entities": [{"name": "Firma"}]}'
@@ -44,7 +44,7 @@ class TestClaudeProvider(unittest.TestCase):
         self.assertEqual(result.important_dates, ['2026-08-08'])
         self.assertEqual(result.extracted_entities, [{'name': 'Firma'}])
 
-    @patch('app.providers.claude_provider.Anthropic')
+    @patch('backend.app.providers.claude_provider.Anthropic')
     @patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'})
     def test_claude_provider_invalid_json(self, mock_anthropic):
         mock_anthropic.return_value.messages.create.return_value = DummyResponse('not json')
