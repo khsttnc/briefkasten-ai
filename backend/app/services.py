@@ -12,7 +12,8 @@ pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tessera
 
 from .ai_service import AIService
 from .models import Document, DocumentAIAnalysis
-from .providers.claude_provider import ClaudeProvider
+from .providers.provider_factory import get_ai_provider
+from .document_processing import DocumentProcessingOrchestrator
 
 UPLOAD_FOLDER = "uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -130,12 +131,12 @@ def analyze_document_ai_by_id(document_id: int, db: Session) -> dict:
         _ensure_document_analyzed(document, db)
 
     try:
-        provider = ClaudeProvider()
+        provider = get_ai_provider()
     except Exception as exc:
         analysis_record = DocumentAIAnalysis(
             document_id=document.id,
-            provider="anthropic",
-            model=os.getenv("ANTHROPIC_MODEL", "claude-3.5-mini"),
+            provider="unknown",
+            model="unknown",
             status="failed",
             raw_response=json.dumps({}),
             error_message=str(exc),
@@ -145,10 +146,10 @@ def analyze_document_ai_by_id(document_id: int, db: Session) -> dict:
         db.commit()
         db.refresh(analysis_record)
 
-        raise HTTPException(status_code=503, detail="Claude provider is not configured.")
+        raise HTTPException(status_code=503, detail=str(exc))
 
-    ai_service = AIService(provider)
-    analysis_result = ai_service.analyze(document.text or "")
+    orchestrator = DocumentProcessingOrchestrator(provider)
+    analysis_result = orchestrator.run(document.text or "")
 
     status = "failed" if analysis_result.error_message else "completed"
     raw_response = analysis_result.raw_response or {}

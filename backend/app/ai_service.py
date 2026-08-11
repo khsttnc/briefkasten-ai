@@ -45,5 +45,8 @@ class AIService:
     def __init__(self, provider: AIProvider):
         self.provider = provider
 
-    def analyze(self, text: str) -> AIAnalysisResult:
+    def analyze(self, text: str, task: Optional[str] = None) -> AIAnalysisResult:
+        analyze_with_task = getattr(self.provider, "analyze_document_with_task", None)
+        if task is not None and callable(analyze_with_task):
+            return analyze_with_task(text, task)
         return self.provider.analyze_document(text)

@@ -97,3 +97,6 @@ class ClaudeProvider(BaseAIProvider):
             extracted_entities=parsed.get("extracted_entities"),
             raw_response=parsed,
         )
+
+    def analyze_document_with_task(self, text: str, task: str) -> AIAnalysisResult:
+        return self.analyze_document(text)
