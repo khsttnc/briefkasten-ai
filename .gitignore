@@ -2,6 +2,7 @@ backend/uploads/
 __pycache__/
 *.pyc
 backend/briefkasten.db
+briefkasten.db
 
 # Frontend build artifacts and dependencies
 frontend/dist/

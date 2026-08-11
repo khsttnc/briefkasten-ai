@@ -66,6 +66,24 @@ class TestProviderSelection(unittest.TestCase):
         provider = get_ai_provider()
         self.assertEqual(provider.provider_name, 'ollama')
 
+    @patch.dict('os.environ', {'AI_PROVIDER': 'ollama', 'OLLAMA_MODEL': 'test-model'}, clear=True)
+    def test_provider_factory_ollama_does_not_import_anthropic(self):
+        from .providers.provider_factory import get_ai_provider
+
+        original_import = __import__
+
+        def import_blocker(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == 'anthropic' or name.startswith('anthropic.'):
+                raise ImportError('anthropic should not be imported for ollama')
+            return original_import(name, globals, locals, fromlist, level)
+
+        with patch('builtins.__import__', side_effect=import_blocker):
+            provider = get_ai_provider()
+
+        self.assertEqual(provider.provider_name, 'ollama')
+        self.assertEqual(provider.model_name, 'test-model')
+        self.assertIsInstance(provider, OllamaProvider)
+
     @patch.dict('os.environ', {}, clear=True)
     def test_provider_factory_defaults_to_claude(self):
         from .providers.provider_factory import get_ai_provider
