@@ -5,11 +5,7 @@ from typing import Any, Dict, List, Optional
 from anthropic import Anthropic
 
 from ..ai_service import AIAnalysisResult, BaseAIProvider
-
-
-ANTHROPIC_API_KEY_ENV = "ANTHROPIC_API_KEY"
-ANTHROPIC_MODEL_ENV = "ANTHROPIC_MODEL"
-DEFAULT_ANTHROPIC_MODEL = "claude-opus-5"
+from ..config import ANTHROPIC_API_KEY_ENV, ANTHROPIC_MODEL_ENV, DEFAULT_ANTHROPIC_MODEL
 
 
 def _load_json_safe(text: str) -> Optional[Dict[str, Any]]:

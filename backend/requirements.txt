@@ -18,3 +18,4 @@ sqlalchemy==2.0.32
 anthropic==0.121.0
 pytesseract
 Pillow
+python-dotenv==1.1.1

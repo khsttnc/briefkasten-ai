@@ -1,13 +1,13 @@
 import os
 
+from ..config import AI_PROVIDER_ENV, DEFAULT_AI_PROVIDER
 from .ollama_provider import OllamaProvider
 
-DEFAULT_PROVIDER = "claude"
 SUPPORTED_PROVIDERS = {"claude", "ollama"}
 
 
 def get_ai_provider():
-    provider_name = os.getenv("AI_PROVIDER", DEFAULT_PROVIDER).strip().lower()
+    provider_name = os.getenv(AI_PROVIDER_ENV, DEFAULT_AI_PROVIDER).strip().lower()
 
     if provider_name == "claude":
         from .claude_provider import ClaudeProvider

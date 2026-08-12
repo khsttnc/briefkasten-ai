@@ -8,14 +8,15 @@ import fitz
 from PIL import Image
 import pytesseract
 
-pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+from .config import TESSERACT_CMD, UPLOAD_FOLDER
+
+pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
 
 from .ai_service import AIService
 from .models import Document, DocumentAIAnalysis
 from .providers.provider_factory import get_ai_provider
 from .document_processing import DocumentProcessingOrchestrator
 
-UPLOAD_FOLDER = "uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 

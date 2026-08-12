@@ -7,10 +7,8 @@ import urllib.request
 from typing import Any, Dict, List, Optional
 
 from ..ai_service import AIAnalysisResult, BaseAIProvider
+from ..config import DEFAULT_OLLAMA_BASE_URL, OLLAMA_BASE_URL_ENV, OLLAMA_MODEL_ENV
 
-OLLAMA_BASE_URL_ENV = "OLLAMA_BASE_URL"
-OLLAMA_MODEL_ENV = "OLLAMA_MODEL"
-DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 DEFAULT_MAX_TOKENS = 1200
 
 
