@@ -216,3 +216,153 @@ h1 {
     align-items: stretch;
   }
 }
+
+/* Landing page sections */
+
+.landing-container {
+  /* Shares the app-shell's max-width so landing sections and the
+     upload/analyze tool align on wide screens. */
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 0 16px;
+}
+
+.landing-hero {
+  padding: 72px 0 56px;
+}
+
+.landing-hero .landing-container {
+  max-width: 780px;
+  text-align: center;
+}
+
+.landing-hero-title {
+  margin: 16px 0 0;
+  font-size: clamp(2.2rem, 4vw, 3.2rem);
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+}
+
+.landing-hero-subtitle {
+  margin: 18px 0 0;
+  color: #4b5563;
+  font-size: 1.05rem;
+}
+
+.landing-hero-actions {
+  margin-top: 28px;
+  display: flex;
+  justify-content: center;
+}
+
+.landing-hero-actions .primary-button {
+  padding: 16px 28px;
+  font-size: 1rem;
+}
+
+.landing-section {
+  padding: 48px 0;
+}
+
+.landing-section-muted {
+  background: #f8fafc;
+  border-top: 1px solid #e5e7eb;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.landing-section-title {
+  margin: 0 0 28px;
+  font-size: clamp(1.5rem, 2.4vw, 2rem);
+  letter-spacing: -0.02em;
+  text-align: center;
+}
+
+.landing-steps-grid,
+.landing-features-grid,
+.landing-security-grid {
+  display: grid;
+  gap: 20px;
+}
+
+.landing-steps-grid,
+.landing-security-grid {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.landing-features-grid {
+  /* Fixed 2 columns so 4 feature cards form a balanced 2x2 grid
+     instead of an auto-fit 3+1 layout. */
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.landing-step-card {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 18px;
+  padding: 22px;
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.04);
+}
+
+.landing-step-card h3,
+.landing-feature-card h3 {
+  margin: 0 0 8px;
+  font-size: 1.05rem;
+}
+
+.landing-step-card p,
+.landing-feature-card p {
+  margin: 0;
+  color: #6b7280;
+}
+
+.landing-cta {
+  padding: 40px 0 56px;
+}
+
+.landing-cta-content {
+  text-align: center;
+}
+
+.landing-cta-eyebrow {
+  margin: 0 0 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 0.85rem;
+  color: #6b7280;
+}
+
+.landing-cta-button {
+  padding: 16px 32px;
+  font-size: 1.05rem;
+}
+
+.landing-footer {
+  padding: 28px 0 40px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.landing-footer-content {
+  text-align: center;
+}
+
+.landing-footer-content p {
+  margin: 4px 0;
+}
+
+@media (max-width: 730px) {
+  .landing-hero {
+    padding: 48px 0 40px;
+  }
+
+  .landing-section {
+    padding: 36px 0;
+  }
+
+  .landing-cta {
+    padding: 32px 0 40px;
+  }
+
+  .landing-features-grid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -7,6 +7,14 @@ import {
   AnalyzeResponse,
   UploadResponse,
 } from './api';
+import Hero from './components/landing/Hero';
+import HowItWorks from './components/landing/HowItWorks';
+import Features from './components/landing/Features';
+import Security from './components/landing/Security';
+import CTA from './components/landing/CTA';
+import Footer from './components/landing/Footer';
+
+const TOOL_SECTION_ID = 'analiz-araci';
 
 interface AppError {
   message: string;
@@ -23,6 +31,10 @@ function App() {
   const [aiLoading, setAILoading] = useState(false);
 
   const documentId = useMemo(() => uploadResult?.id ?? null, [uploadResult]);
+
+  const scrollToTool = () => {
+    document.getElementById(TOOL_SECTION_ID)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
 
   const resetState = () => {
     setError(null);
@@ -87,7 +99,14 @@ function App() {
   };
 
   return (
-    <div className="app-shell">
+    <>
+      <Hero onCtaClick={scrollToTool} />
+      <HowItWorks />
+      <Features />
+      <Security />
+      <CTA onCtaClick={scrollToTool} />
+
+      <div className="app-shell" id={TOOL_SECTION_ID}>
       <header className="app-header">
         <div>
           <p className="eyebrow">Briefkasten AI</p>
@@ -213,7 +232,10 @@ function App() {
           )}
         </section>
       </main>
-    </div>
+      </div>
+
+      <Footer />
+    </>
   );
 }
 
