@@ -39,6 +39,8 @@ class TestOllamaProvider(unittest.TestCase):
         provider = OllamaProvider()
         result = provider.analyze_document('Test text')
 
+        mock_urlopen.assert_called_once()
+
         self.assertIsInstance(result, AIAnalysisResult)
         self.assertEqual(result.document_type, 'invoice')
         self.assertEqual(result.language, 'de')

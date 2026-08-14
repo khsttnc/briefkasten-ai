@@ -12,48 +12,52 @@ class DummyProvider:
     provider_name = 'dummy'
     model_name = 'dummy-model'
 
+    def __init__(self):
+        self.calls = 0
+
     def analyze_document(self, text: str) -> AIAnalysisResult:
-        return AIAnalysisResult(document_type='invoice', language='de')
+        self.calls += 1
+        return AIAnalysisResult(
+            document_type='invoice',
+            language='de',
+            summary='Özet',
+            turkish_explanation='Açıklama',
+            important_dates=['2026-08-08'],
+            extracted_entities=[{'name': 'Firma'}],
+            raw_response={'document_type': 'invoice', 'language': 'de'},
+        )
 
     def analyze_document_with_task(self, text: str, task: str) -> AIAnalysisResult:
-        if task == 'classification':
-            return AIAnalysisResult(document_type='invoice', language='de')
-        if task == 'extraction':
-            return AIAnalysisResult(important_dates=['2026-08-08'], extracted_entities=[{'name': 'Firma'}])
-        if task == 'explanation':
-            return AIAnalysisResult(summary='Özet', turkish_explanation='Açıklama')
-        return AIAnalysisResult()
+        raise AssertionError('single-call orchestrator must not use analyze_document_with_task')
 
 
 class TestDocumentProcessingOrchestrator(unittest.TestCase):
-    def test_orchestrator_combines_pipeline_results(self):
+    def test_orchestrator_makes_single_provider_call_with_all_fields(self):
         provider = DummyProvider()
         orchestrator = DocumentProcessingOrchestrator(provider)
 
         result = orchestrator.run('Test text')
 
+        self.assertEqual(provider.calls, 1)
         self.assertEqual(result.document_type, 'invoice')
         self.assertEqual(result.language, 'de')
         self.assertEqual(result.summary, 'Özet')
         self.assertEqual(result.turkish_explanation, 'Açıklama')
         self.assertEqual(result.important_dates, ['2026-08-08'])
         self.assertEqual(result.extracted_entities, [{'name': 'Firma'}])
-        self.assertIn('classification', result.raw_response)
-        self.assertIn('extraction', result.raw_response)
-        self.assertIn('explanation', result.raw_response)
 
-    def test_orchestrator_stops_on_error(self):
+    def test_orchestrator_propagates_error_from_single_call(self):
         class ErrorProvider(DummyProvider):
-            def analyze_document_with_task(self, text: str, task: str) -> AIAnalysisResult:
-                if task == 'classification':
-                    return AIAnalysisResult(error_message='fail')
-                return super().analyze_document_with_task(text, task)
+            def analyze_document(self, text: str) -> AIAnalysisResult:
+                self.calls += 1
+                return AIAnalysisResult(error_message='fail')
 
         provider = ErrorProvider()
         orchestrator = DocumentProcessingOrchestrator(provider)
 
         result = orchestrator.run('Test text')
         self.assertEqual(result.error_message, 'fail')
+        self.assertEqual(provider.calls, 1)
 
 
 class TestProviderSelection(unittest.TestCase):

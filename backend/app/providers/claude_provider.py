@@ -55,7 +55,6 @@ class ClaudeProvider(BaseAIProvider):
             model=self._model,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=1200,
-            stop_sequences=["\n\n"],
         )
 
         raw_text = ""

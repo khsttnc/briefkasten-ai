@@ -36,6 +36,10 @@ class TestClaudeProvider(unittest.TestCase):
         provider = ClaudeProvider()
         result = provider.analyze_document('Test text')
 
+        mock_anthropic.return_value.messages.create.assert_called_once()
+        call_kwargs = mock_anthropic.return_value.messages.create.call_args.kwargs
+        self.assertNotIn('stop_sequences', call_kwargs)
+
         self.assertIsInstance(result, AIAnalysisResult)
         self.assertEqual(result.document_type, 'invoice')
         self.assertEqual(result.language, 'de')
