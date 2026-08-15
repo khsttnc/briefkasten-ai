@@ -1,5 +1,6 @@
 from pathlib import Path
 import os
+import platform
 
 BASE_DIR = Path(__file__).resolve().parent.parent  # backend/
 
@@ -15,7 +16,16 @@ DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DATABASE_PATH.as_posix()}"
 
 UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", str(BASE_DIR / "uploads"))
 
-TESSERACT_CMD = os.getenv("TESSERACT_CMD", r"C:\Program Files\Tesseract-OCR\tesseract.exe")
+def _default_tesseract_cmd() -> str:
+    # Windows installers don't add tesseract.exe to PATH, so keep the known
+    # default install location there. On Linux/macOS, tesseract is typically
+    # installed via a package manager and already on PATH.
+    if platform.system() == "Windows":
+        return r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+    return "tesseract"
+
+
+TESSERACT_CMD = os.getenv("TESSERACT_CMD", _default_tesseract_cmd())
 
 AI_PROVIDER_ENV = "AI_PROVIDER"
 DEFAULT_AI_PROVIDER = "claude"

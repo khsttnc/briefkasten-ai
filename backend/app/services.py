@@ -1,7 +1,9 @@
 import json
 import os
-import shutil
+import re
+import uuid
 from datetime import datetime
+from pathlib import Path
 from fastapi import UploadFile, HTTPException
 from sqlalchemy.orm import Session
 import fitz
@@ -19,16 +21,73 @@ from .document_processing import DocumentProcessingOrchestrator
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
+UPLOAD_ROOT = Path(UPLOAD_FOLDER).resolve()
+
+ALLOWED_UPLOAD_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".tif"}
+MAX_UPLOAD_SIZE_BYTES = int(os.getenv("MAX_UPLOAD_SIZE_MB", "50")) * 1024 * 1024
+UPLOAD_CHUNK_SIZE = 1024 * 1024
+
+_UNSAFE_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._ \-]")
+
+
+def _sanitize_original_filename(filename: str) -> str:
+    """Reduce a client-supplied filename to a safe, display-only value (never used as a path)."""
+    name = os.path.basename((filename or "").replace("\x00", ""))
+    name = _UNSAFE_FILENAME_CHARS.sub("_", name).strip().strip(".")
+    return name[:255] if name else "upload"
+
+
+def _validate_upload_extension(filename: str) -> str:
+    ext = Path(filename or "").suffix.lower()
+    if ext not in ALLOWED_UPLOAD_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unsupported file extension '{ext or '(none)'}'. "
+                f"Allowed: {', '.join(sorted(ALLOWED_UPLOAD_EXTENSIONS))}"
+            ),
+        )
+    return ext
+
 
 def save_document(file: UploadFile, db: Session) -> Document:
-    file_path = os.path.join(UPLOAD_FOLDER, file.filename)
+    original_name = file.filename or ""
+    ext = _validate_upload_extension(original_name)
+    safe_display_name = _sanitize_original_filename(original_name)
 
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    # Storage name is always a generated UUID + validated extension, so the
+    # client-supplied filename never reaches the filesystem as a path.
+    stored_name = f"{uuid.uuid4().hex}{ext}"
+    file_path = (UPLOAD_ROOT / stored_name).resolve()
+
+    if UPLOAD_ROOT not in file_path.parents:
+        raise HTTPException(status_code=400, detail="Invalid filename.")
+
+    size = 0
+    try:
+        with open(file_path, "wb") as buffer:
+            while True:
+                chunk = file.file.read(UPLOAD_CHUNK_SIZE)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > MAX_UPLOAD_SIZE_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"File exceeds maximum allowed size of {MAX_UPLOAD_SIZE_BYTES // (1024 * 1024)}MB.",
+                    )
+                buffer.write(chunk)
+    except HTTPException:
+        file_path.unlink(missing_ok=True)
+        raise
+
+    if size == 0:
+        file_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
     document = Document(
-        filename=file.filename,
-        filepath=file_path,
+        filename=safe_display_name,
+        filepath=str(file_path),
         status="uploaded",
     )
 

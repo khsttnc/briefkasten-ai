@@ -4,6 +4,10 @@ __pycache__/
 backend/briefkasten.db
 briefkasten.db
 
+# Environment secrets - never commit
+backend/.env
+.env
+
 # Frontend build artifacts and dependencies
 frontend/dist/
 frontend/node_modules/
