@@ -349,6 +349,24 @@ h1 {
   margin: 4px 0;
 }
 
+.landing-footer-links {
+  margin-top: 14px;
+  display: flex;
+  justify-content: center;
+  gap: 20px;
+}
+
+.landing-footer-links a {
+  color: #6b7280;
+  text-decoration: none;
+  font-size: 0.92rem;
+}
+
+.landing-footer-links a:hover {
+  color: #2563eb;
+  text-decoration: underline;
+}
+
 @media (max-width: 730px) {
   .landing-hero {
     padding: 48px 0 40px;
@@ -365,4 +383,53 @@ h1 {
   .landing-features-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* Legal pages (Impressum, Datenschutz) */
+
+.legal-back-link {
+  display: inline-block;
+  margin-bottom: 16px;
+  color: #2563eb;
+  text-decoration: none;
+  font-size: 0.95rem;
+}
+
+.legal-back-link:hover {
+  text-decoration: underline;
+}
+
+.legal-content h2 {
+  margin: 28px 0 10px;
+  font-size: 1.1rem;
+}
+
+.legal-content h2:first-child {
+  margin-top: 0;
+}
+
+.legal-content p {
+  margin: 0 0 12px;
+  color: #374151;
+}
+
+.legal-content ul {
+  margin: 0 0 12px;
+  padding-left: 20px;
+  color: #374151;
+}
+
+.legal-content li {
+  margin-bottom: 6px;
+}
+
+.legal-content address {
+  font-style: normal;
+  color: #374151;
+  margin: 0 0 12px;
+}
+
+.legal-content .status-banner {
+  margin-top: 0;
+  margin-bottom: 24px;
 }

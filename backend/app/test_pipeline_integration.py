@@ -6,12 +6,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 import fitz
+from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from . import services
 from .ai_service import AIAnalysisResult
-from .models import Base, Document
+from .models import Base, Document, DocumentAIAnalysis
 
 
 class FakeUploadFile:
@@ -41,6 +42,24 @@ class DummyAIProvider:
             important_dates=["2026-01-01"],
             extracted_entities=[{"name": "Test GmbH"}],
             raw_response={"document_type": "letter"},
+        )
+
+
+class ErrorAIProvider:
+    """Stand-in AI provider that always reports a failed analysis, without
+    ever making a real Claude/Ollama network call."""
+
+    provider_name = "dummy-error"
+    model_name = "dummy-error-model"
+
+    def __init__(self):
+        self.calls = 0
+
+    def analyze_document(self, text: str) -> AIAnalysisResult:
+        self.calls += 1
+        return AIAnalysisResult(
+            error_message="Simulated provider failure.",
+            raw_response={"raw_text": ""},
         )
 
 
@@ -101,6 +120,166 @@ class UploadAnalyzePipelineIntegrationTestCase(unittest.TestCase):
         self.assertEqual(result["document_type"], "letter")
         self.assertEqual(result["summary"], "Test summary")
         self.assertIsNone(result["error_message"])
+
+
+class DuplicateAIAnalysisPreventionTestCase(unittest.TestCase):
+    """Verifies that a completed AI analysis is reused instead of re-calling
+    the AI provider, while a failed analysis remains retryable. Uses an
+    isolated in-memory database, an isolated temp upload directory, and
+    mocked AI providers (no real Claude/Ollama network calls). The real
+    backend/briefkasten.db and backend/uploads/ are never touched."""
+
+    def setUp(self):
+        self.tmp_dir = Path(tempfile.mkdtemp(prefix="briefkasten_dedupe_test_"))
+        self.upload_root_patcher = patch.object(services, "UPLOAD_ROOT", self.tmp_dir.resolve())
+        self.upload_root_patcher.start()
+
+        self.engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+        Base.metadata.create_all(bind=self.engine)
+        self.SessionLocal = sessionmaker(bind=self.engine)
+        self.db = self.SessionLocal()
+
+    def tearDown(self):
+        self.db.close()
+        self.upload_root_patcher.stop()
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def _upload_and_extract(self) -> Document:
+        pdf_bytes = _build_sample_pdf_bytes("Bescheid Nr. 456 fuer Test GmbH")
+        upload = FakeUploadFile("Bescheid.pdf", pdf_bytes)
+        document = services.save_document(upload, self.db)
+        services.analyze_document_by_id(document.id, self.db)
+        return document
+
+    def test_first_call_invokes_provider_once_and_persists_result(self):
+        # Covers: a document with no existing analysis behaves as before -
+        # exactly one provider call, exactly one persisted analysis row.
+        document = self._upload_and_extract()
+        dummy_provider = DummyAIProvider()
+
+        with patch.object(services, "get_ai_provider", return_value=dummy_provider):
+            result = services.analyze_document_ai_by_id(document.id, self.db)
+
+        self.assertEqual(dummy_provider.calls, 1)
+        self.assertEqual(result["status"], "completed")
+
+        stored = (
+            self.db.query(DocumentAIAnalysis)
+            .filter(DocumentAIAnalysis.document_id == document.id)
+            .all()
+        )
+        self.assertEqual(len(stored), 1)
+        self.assertEqual(stored[0].status, "completed")
+
+    def test_second_call_reuses_cached_result_without_calling_provider(self):
+        document = self._upload_and_extract()
+        dummy_provider = DummyAIProvider()
+
+        with patch.object(services, "get_ai_provider", return_value=dummy_provider):
+            first_result = services.analyze_document_ai_by_id(document.id, self.db)
+            second_result = services.analyze_document_ai_by_id(document.id, self.db)
+
+        self.assertEqual(dummy_provider.calls, 1)
+        self.assertEqual(second_result, first_result)
+
+        stored = (
+            self.db.query(DocumentAIAnalysis)
+            .filter(DocumentAIAnalysis.document_id == document.id)
+            .all()
+        )
+        self.assertEqual(len(stored), 1)
+
+    def test_cached_result_preserves_all_fields(self):
+        document = self._upload_and_extract()
+        dummy_provider = DummyAIProvider()
+
+        with patch.object(services, "get_ai_provider", return_value=dummy_provider):
+            services.analyze_document_ai_by_id(document.id, self.db)
+            cached_result = services.analyze_document_ai_by_id(document.id, self.db)
+
+        self.assertEqual(dummy_provider.calls, 1)
+        self.assertEqual(cached_result["document_type"], "letter")
+        self.assertEqual(cached_result["language"], "de")
+        self.assertEqual(cached_result["summary"], "Test summary")
+        self.assertEqual(cached_result["turkish_explanation"], "Test aciklama")
+        self.assertEqual(cached_result["important_dates"], ["2026-01-01"])
+        self.assertEqual(cached_result["extracted_entities"], [{"name": "Test GmbH"}])
+        self.assertIsNone(cached_result["error_message"])
+
+    def test_failed_analysis_can_be_retried(self):
+        document = self._upload_and_extract()
+        error_provider = ErrorAIProvider()
+
+        with patch.object(services, "get_ai_provider", return_value=error_provider):
+            with self.assertRaises(HTTPException):
+                services.analyze_document_ai_by_id(document.id, self.db)
+
+        self.assertEqual(error_provider.calls, 1)
+
+        failed_rows = (
+            self.db.query(DocumentAIAnalysis)
+            .filter(
+                DocumentAIAnalysis.document_id == document.id,
+                DocumentAIAnalysis.status == "failed",
+            )
+            .all()
+        )
+        self.assertEqual(len(failed_rows), 1)
+
+        dummy_provider = DummyAIProvider()
+        with patch.object(services, "get_ai_provider", return_value=dummy_provider):
+            result = services.analyze_document_ai_by_id(document.id, self.db)
+
+        self.assertEqual(dummy_provider.calls, 1)
+        self.assertEqual(result["status"], "completed")
+
+
+class DocumentAnalysisErrorHandlingTestCase(unittest.TestCase):
+    """Verifies that a corrupted on-disk file and a missing Tesseract binary
+    produce clean HTTPExceptions instead of crashing the request."""
+
+    def setUp(self):
+        self.tmp_dir = Path(tempfile.mkdtemp(prefix="briefkasten_analysis_errors_test_"))
+        self.upload_root_patcher = patch.object(services, "UPLOAD_ROOT", self.tmp_dir.resolve())
+        self.upload_root_patcher.start()
+
+        self.engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+        Base.metadata.create_all(bind=self.engine)
+        self.SessionLocal = sessionmaker(bind=self.engine)
+        self.db = self.SessionLocal()
+
+    def tearDown(self):
+        self.db.close()
+        self.upload_root_patcher.stop()
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def test_corrupt_file_on_disk_raises_clean_error(self):
+        pdf_bytes = _build_sample_pdf_bytes("Bescheid Nr. 789")
+        document = services.save_document(FakeUploadFile("Bescheid.pdf", pdf_bytes), self.db)
+
+        # Simulate the stored file becoming corrupted after a valid upload.
+        with open(document.filepath, "wb") as corrupt_file:
+            corrupt_file.write(b"not a pdf anymore")
+
+        with self.assertRaises(HTTPException) as ctx:
+            services.analyze_document_by_id(document.id, self.db)
+
+        self.assertEqual(ctx.exception.status_code, 422)
+
+    def test_missing_tesseract_binary_raises_clean_error(self):
+        # Empty-text PDF triggers the OCR fallback path.
+        pdf_bytes = _build_sample_pdf_bytes("")
+        document = services.save_document(FakeUploadFile("Scan.pdf", pdf_bytes), self.db)
+
+        with patch.object(
+            services.pytesseract,
+            "image_to_string",
+            side_effect=services.pytesseract.TesseractNotFoundError(),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                services.analyze_document_by_id(document.id, self.db)
+
+        self.assertEqual(ctx.exception.status_code, 503)
 
 
 if __name__ == "__main__":

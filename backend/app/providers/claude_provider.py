@@ -2,7 +2,14 @@ import json
 import os
 from typing import Any, Dict, List, Optional
 
-from anthropic import Anthropic
+from anthropic import (
+    Anthropic,
+    APIConnectionError,
+    APIError,
+    APIStatusError,
+    AuthenticationError,
+    RateLimitError,
+)
 
 from ..ai_service import AIAnalysisResult, BaseAIProvider
 from ..config import ANTHROPIC_API_KEY_ENV, ANTHROPIC_MODEL_ENV, DEFAULT_ANTHROPIC_MODEL
@@ -51,11 +58,39 @@ class ClaudeProvider(BaseAIProvider):
 
     def analyze_document(self, text: str) -> AIAnalysisResult:
         prompt = _build_claude_prompt(text)
-        response = self.client.messages.create(
-            model=self._model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=1200,
-        )
+        try:
+            response = self.client.messages.create(
+                model=self._model,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=1200,
+            )
+        # RateLimitError and AuthenticationError are subclasses of APIStatusError,
+        # so they must be caught before the general APIStatusError branch.
+        except RateLimitError as exc:
+            return AIAnalysisResult(
+                error_message="Claude API rate limit exceeded. Please try again later.",
+                raw_response={"error": str(exc)},
+            )
+        except AuthenticationError as exc:
+            return AIAnalysisResult(
+                error_message="Claude API authentication failed. Please check the server configuration.",
+                raw_response={"error": str(exc)},
+            )
+        except APIConnectionError as exc:
+            return AIAnalysisResult(
+                error_message="Unable to connect to the Claude API. Please try again later.",
+                raw_response={"error": str(exc)},
+            )
+        except APIStatusError as exc:
+            return AIAnalysisResult(
+                error_message=f"Claude API returned an error (status {exc.status_code}).",
+                raw_response={"error": str(exc)},
+            )
+        except APIError as exc:
+            return AIAnalysisResult(
+                error_message="Claude API request failed.",
+                raw_response={"error": str(exc)},
+            )
 
         raw_text = ""
         content = getattr(response, "content", None)

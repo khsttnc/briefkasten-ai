@@ -13,6 +13,8 @@ import Features from './components/landing/Features';
 import Security from './components/landing/Security';
 import CTA from './components/landing/CTA';
 import Footer from './components/landing/Footer';
+import Impressum from './components/legal/Impressum';
+import Datenschutz from './components/legal/Datenschutz';
 
 const TOOL_SECTION_ID = 'analiz-araci';
 
@@ -21,6 +23,30 @@ interface AppError {
 }
 
 function App() {
+  const pathname = window.location.pathname.replace(/\/+$/, '') || '/';
+
+  if (pathname === '/impressum') {
+    return (
+      <>
+        <Impressum />
+        <Footer />
+      </>
+    );
+  }
+
+  if (pathname === '/datenschutz') {
+    return (
+      <>
+        <Datenschutz />
+        <Footer />
+      </>
+    );
+  }
+
+  return <AppHome />;
+}
+
+function AppHome() {
   const [file, setFile] = useState<File | null>(null);
   const [uploadResult, setUploadResult] = useState<UploadResponse | null>(null);
   const [analysisResult, setAnalysisResult] = useState<AnalyzeResponse | null>(null);

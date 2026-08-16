@@ -1,8 +1,12 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 
 from .database import Base
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class Document(Base):
@@ -11,7 +15,7 @@ class Document(Base):
     id = Column(Integer, primary_key=True, index=True)
     filename = Column(String, index=True, nullable=False)
     filepath = Column(String, nullable=False)
-    uploaded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    uploaded_at = Column(DateTime, default=_utcnow, nullable=False)
     status = Column(String, default="uploaded", nullable=False)
     text = Column(Text, nullable=True)
     character_count = Column(Integer, nullable=True)
@@ -40,7 +44,7 @@ class DocumentAIAnalysis(Base):
     extracted_entities = Column(Text, nullable=True)
     raw_response = Column(Text, nullable=True)
     error_message = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
     completed_at = Column(DateTime, nullable=True)
 
     document = relationship("Document", back_populates="analyses")

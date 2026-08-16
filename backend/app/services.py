@@ -2,7 +2,7 @@ import json
 import os
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import UploadFile, HTTPException
 from sqlalchemy.orm import Session
@@ -50,6 +50,30 @@ def _validate_upload_extension(filename: str) -> str:
     return ext
 
 
+def _validate_pdf_content(file_path: Path) -> None:
+    """Reject files with a .pdf extension whose content is not actually a
+    valid, parseable PDF (fake content, wrong format, or corrupt/truncated
+    data). Cleans up the stored file on rejection, same as the other upload
+    validation steps."""
+    try:
+        # Read into memory rather than fitz.open(path): opening by path can
+        # leave the OS-level file handle held past a failed parse on
+        # Windows, which would make the unlink() below fail with a
+        # PermissionError.
+        pdf_bytes = file_path.read_bytes()
+        pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    except Exception:
+        file_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="Uploaded file is not a valid PDF.")
+
+    try:
+        if not pdf_doc.is_pdf:
+            file_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=400, detail="Uploaded file is not a valid PDF.")
+    finally:
+        pdf_doc.close()
+
+
 def save_document(file: UploadFile, db: Session) -> Document:
     original_name = file.filename or ""
     ext = _validate_upload_extension(original_name)
@@ -85,6 +109,9 @@ def save_document(file: UploadFile, db: Session) -> Document:
         file_path.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
+    if ext == ".pdf":
+        _validate_pdf_content(file_path)
+
     document = Document(
         filename=safe_display_name,
         filepath=str(file_path),
@@ -99,17 +126,32 @@ def save_document(file: UploadFile, db: Session) -> Document:
 
 
 def extract_text_with_ocr(filepath: str) -> str:
-    doc = fitz.open(filepath)
-    pages_text = []
-    for page in doc:
-        pix = page.get_pixmap(alpha=False)
-        mode = "RGB" if pix.n >= 3 else "L"
-        image = Image.frombytes(mode, [pix.width, pix.height], pix.samples)
-        if mode == "L":
-            image = image.convert("RGB")
-        page_text = pytesseract.image_to_string(image)
-        if page_text:
-            pages_text.append(page_text)
+    try:
+        doc = fitz.open(filepath)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="Uploaded file could not be read for OCR processing.",
+        ) from exc
+
+    try:
+        pages_text = []
+        for page in doc:
+            pix = page.get_pixmap(alpha=False)
+            mode = "RGB" if pix.n >= 3 else "L"
+            image = Image.frombytes(mode, [pix.width, pix.height], pix.samples)
+            if mode == "L":
+                image = image.convert("RGB")
+            page_text = pytesseract.image_to_string(image)
+            if page_text:
+                pages_text.append(page_text)
+    except pytesseract.TesseractNotFoundError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="OCR is not available on this server (Tesseract is not installed or misconfigured).",
+        ) from exc
+    finally:
+        doc.close()
 
     return "\n".join(pages_text)
 
@@ -125,10 +167,17 @@ def _ensure_document_analyzed(document: Document, db: Session) -> dict:
     if not os.path.exists(document.filepath):
         raise HTTPException(status_code=404, detail="Uploaded file not found on disk")
 
-    doc = fitz.open(document.filepath)
-    text = ""
-    for page in doc:
-        text += page.get_text()
+    try:
+        doc = fitz.open(document.filepath)
+        text = ""
+        for page in doc:
+            text += page.get_text()
+        doc.close()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="Uploaded file could not be read as a valid document.",
+        ) from exc
 
     meaningful_text = text.strip()
     if meaningful_text:
@@ -181,11 +230,42 @@ def analyze_document_by_id(document_id: int, db: Session) -> dict:
     return _ensure_document_analyzed(document, db)
 
 
+def _serialize_completed_analysis(analysis: DocumentAIAnalysis) -> dict:
+    return {
+        "analysis_id": analysis.id,
+        "document_id": analysis.document_id,
+        "provider": analysis.provider,
+        "model": analysis.model,
+        "status": analysis.status,
+        "document_type": analysis.document_type,
+        "language": analysis.language,
+        "summary": analysis.summary,
+        "turkish_explanation": analysis.turkish_explanation,
+        "important_dates": json.loads(analysis.important_dates) if analysis.important_dates else [],
+        "extracted_entities": json.loads(analysis.extracted_entities) if analysis.extracted_entities else [],
+        "error_message": analysis.error_message,
+    }
+
+
 def analyze_document_ai_by_id(document_id: int, db: Session) -> dict:
     document = db.query(Document).filter(Document.id == document_id).first()
 
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
+
+    # Reuse a previously completed analysis instead of re-calling the AI
+    # provider. Failed analyses are excluded so they remain retryable.
+    existing_analysis = (
+        db.query(DocumentAIAnalysis)
+        .filter(
+            DocumentAIAnalysis.document_id == document.id,
+            DocumentAIAnalysis.status == "completed",
+        )
+        .order_by(DocumentAIAnalysis.id.desc())
+        .first()
+    )
+    if existing_analysis is not None:
+        return _serialize_completed_analysis(existing_analysis)
 
     if not document.text or not document.text.strip():
         _ensure_document_analyzed(document, db)
@@ -200,13 +280,16 @@ def analyze_document_ai_by_id(document_id: int, db: Session) -> dict:
             status="failed",
             raw_response=json.dumps({}),
             error_message=str(exc),
-            completed_at=datetime.utcnow(),
+            completed_at=datetime.now(timezone.utc),
         )
         db.add(analysis_record)
         db.commit()
         db.refresh(analysis_record)
 
-        raise HTTPException(status_code=503, detail=str(exc))
+        raise HTTPException(
+            status_code=503,
+            detail="AI provider is not available. Please check the server configuration.",
+        )
 
     orchestrator = DocumentProcessingOrchestrator(provider)
     analysis_result = orchestrator.run(document.text or "")
@@ -229,7 +312,7 @@ def analyze_document_ai_by_id(document_id: int, db: Session) -> dict:
         extracted_entities=json.dumps(analysis_result.extracted_entities or []),
         raw_response=json.dumps(raw_response),
         error_message=analysis_result.error_message,
-        completed_at=datetime.utcnow(),
+        completed_at=datetime.now(timezone.utc),
     )
 
     db.add(analysis_record)
