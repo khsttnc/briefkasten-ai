@@ -7,7 +7,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent  # backend/
 try:
     from dotenv import load_dotenv
 
-    load_dotenv(BASE_DIR / ".env")
+    # override=True: backend/.env is the project's authoritative local config
+    # (see CLAUDE.md). Without it, python-dotenv's default (do not override
+    # already-set process env vars) means a stale AI_PROVIDER/ANTHROPIC_API_KEY
+    # left over from an earlier shell session silently wins over .env, causing
+    # the app to call Claude even when .env says AI_PROVIDER=ollama.
+    load_dotenv(BASE_DIR / ".env", override=True)
 except ImportError:
     pass
 

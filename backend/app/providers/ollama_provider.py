@@ -9,7 +9,44 @@ from typing import Any, Dict, List, Optional
 from ..ai_service import AIAnalysisResult, BaseAIProvider
 from ..config import DEFAULT_OLLAMA_BASE_URL, OLLAMA_BASE_URL_ENV, OLLAMA_MODEL_ENV
 
-DEFAULT_MAX_TOKENS = 1200
+# Ollama's native /api/generate endpoint does not recognize a top-level
+# "max_tokens" field (that's the OpenAI-compatible endpoint's parameter
+# name) - it is silently ignored, leaving generation length uncapped. The
+# real cap is "options.num_predict". Kept at the same value previously
+# intended for max_tokens.
+DEFAULT_NUM_PREDICT = 1200
+
+# Ollama's runtime context window defaults to 2048 tokens regardless of a
+# model's advertised maximum (llama3.2:3b supports far more, but Ollama
+# doesn't use that automatically). The prompt here is a fixed instruction
+# preamble (well under 300 tokens) plus a single document's OCR text, which
+# for typical scanned letters/notices runs to a few hundred tokens. 4096
+# comfortably covers prompt + document + the num_predict output budget above
+# without requiring an unnecessarily large context on constrained hardware.
+DEFAULT_NUM_CTX = 4096
+
+# Small instruction-tuned models are prone to repetition loops and drifting
+# off the requested JSON schema/language at Ollama's default temperature
+# (0.8). Structured-extraction tasks like this one don't need creative
+# sampling, so a low temperature makes output more deterministic and
+# schema-compliant.
+DEFAULT_TEMPERATURE = 0.2
+
+# Ollama's default repeat_penalty (1.1) was not enough to reliably stop
+# llama3.2:3b from getting stuck verbatim-repeating the same sentence inside
+# turkish_explanation until it ran out its whole num_predict budget mid
+# string - the direct cause of the "unable to parse" JSON failures seen in
+# real testing. Across ~30 real runs against the actual uploaded document
+# (batches of 6 at several repeat_penalty/temperature combinations),
+# 1.1-1.15 consistently produced the most malformed JSON (roughly half or
+# more of runs), while 1.25-1.3 was consistently the best of what was
+# tried (roughly a third or fewer malformed) - not a full fix, but the
+# best tradeoff found. Known tradeoff, also confirmed in real testing:
+# forcing the model off a repeated phrase this way sometimes makes it
+# drift into garbled/non-Turkish script for turkish_explanation instead of
+# a fluent paraphrase - a llama3.2:3b Turkish-fluency limitation that no
+# repeat_penalty/temperature combination tried here eliminated.
+DEFAULT_REPEAT_PENALTY = 1.3
 
 
 def _load_json_safe(text: str) -> Optional[Dict[str, Any]]:
@@ -60,6 +97,9 @@ def _build_ollama_prompt(text: str, task: Optional[str] = None) -> str:
         return (
             "You are an AI assistant analyzing a German official or corporate document. "
             "Return a valid JSON object with the keys: summary and turkish_explanation. "
+            "The value of turkish_explanation MUST be written in the TURKISH language. "
+            "It must explain in Turkish what the document means, its important consequences, "
+            "and what the reader should do next. "
             "Do not include any additional text or explanation. "
             "If a value is uncertain, use null. "
             f"Text:\n{text}\n"
@@ -71,6 +111,10 @@ def _build_ollama_prompt(text: str, task: Optional[str] = None) -> str:
         "turkish_explanation, important_dates, extracted_entities. "
         "important_dates must be a JSON array of strings. "
         "extracted_entities must be a JSON array of objects. "
+        "The value of turkish_explanation MUST be written in the TURKISH language, regardless of "
+        "the document's own language. It must explain in Turkish what the document means, its "
+        "important consequences (for example contracts being cancelled, confirmations being "
+        "withdrawn, or new documents being required), and what the reader should do next. "
         "Do not include any additional text or explanation. "
         f"Text:\n{text}\n"
     )
@@ -98,7 +142,19 @@ class OllamaProvider(BaseAIProvider):
             {
                 "model": self._model,
                 "prompt": prompt,
-                "max_tokens": DEFAULT_MAX_TOKENS,
+                # Non-streaming: a single complete JSON response instead of
+                # NDJSON chunks, so the result is either fully there or not.
+                "stream": False,
+                # Ollama-native structured output: constrains decoding to
+                # valid JSON, which is the single biggest lever against the
+                # malformed/truncated JSON observed from llama3.2:3b.
+                "format": "json",
+                "options": {
+                    "num_predict": DEFAULT_NUM_PREDICT,
+                    "num_ctx": DEFAULT_NUM_CTX,
+                    "temperature": DEFAULT_TEMPERATURE,
+                    "repeat_penalty": DEFAULT_REPEAT_PENALTY,
+                },
             }
         ).encode("utf-8")
 
