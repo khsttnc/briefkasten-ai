@@ -15,6 +15,7 @@ from .config import TESSERACT_CMD, UPLOAD_FOLDER
 pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
 
 from .ai_service import AIService
+from .entity_validation import validate_extracted_entities
 from .models import Document, DocumentAIAnalysis
 from .providers.provider_factory import get_ai_provider
 from .document_processing import DocumentProcessingOrchestrator
@@ -74,7 +75,7 @@ def _validate_pdf_content(file_path: Path) -> None:
         pdf_doc.close()
 
 
-def save_document(file: UploadFile, db: Session) -> Document:
+def save_document(file: UploadFile, db: Session, owner_id: int) -> Document:
     original_name = file.filename or ""
     ext = _validate_upload_extension(original_name)
     safe_display_name = _sanitize_original_filename(original_name)
@@ -116,6 +117,7 @@ def save_document(file: UploadFile, db: Session) -> Document:
         filename=safe_display_name,
         filepath=str(file_path),
         status="uploaded",
+        owner_id=owner_id,
     )
 
     db.add(document)
@@ -157,6 +159,11 @@ def extract_text_with_ocr(filepath: str) -> str:
 
 
 def _ensure_document_analyzed(document: Document, db: Session) -> dict:
+    # Invariant: this takes an already-fetched Document, not an id, and does
+    # no ownership check of its own - every caller must have already fetched
+    # `document` scoped to the requesting owner_id (see analyze_document_by_id
+    # / analyze_document_ai_by_id). A new caller that fetches a Document
+    # without an owner_id filter and passes it here breaks that guarantee.
     if document.status == "analyzed" and document.text is not None and document.character_count is not None:
         return {
             "filename": document.filename,
@@ -207,10 +214,13 @@ def _ensure_document_analyzed(document: Document, db: Session) -> dict:
     }
 
 
-def analyze_document(filename: str, db: Session) -> dict:
+def analyze_document(filename: str, db: Session, owner_id: int) -> dict:
+    # Deprecated: filename is not unique, so this returns whichever matching
+    # document the caller most recently uploaded. /analyze/id/{document_id}
+    # is the canonical, precise lookup - kept only for backward compatibility.
     document = (
         db.query(Document)
-        .filter(Document.filename == filename)
+        .filter(Document.filename == filename, Document.owner_id == owner_id)
         .order_by(Document.id.desc())
         .first()
     )
@@ -221,9 +231,16 @@ def analyze_document(filename: str, db: Session) -> dict:
     return _ensure_document_analyzed(document, db)
 
 
-def analyze_document_by_id(document_id: int, db: Session) -> dict:
-    document = db.query(Document).filter(Document.id == document_id).first()
+def analyze_document_by_id(document_id: int, db: Session, owner_id: int) -> dict:
+    document = (
+        db.query(Document)
+        .filter(Document.id == document_id, Document.owner_id == owner_id)
+        .first()
+    )
 
+    # 404 for both "no such document" and "exists but belongs to someone
+    # else" - a 403 would leak which document IDs exist to a user probing
+    # IDs that aren't theirs (IDOR/enumeration).
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
 
@@ -247,14 +264,23 @@ def _serialize_completed_analysis(analysis: DocumentAIAnalysis) -> dict:
     }
 
 
-def analyze_document_ai_by_id(document_id: int, db: Session) -> dict:
-    document = db.query(Document).filter(Document.id == document_id).first()
+def analyze_document_ai_by_id(document_id: int, db: Session, owner_id: int) -> dict:
+    document = (
+        db.query(Document)
+        .filter(Document.id == document_id, Document.owner_id == owner_id)
+        .first()
+    )
 
+    # 404 for both "no such document" and "belongs to someone else" - see
+    # analyze_document_by_id for why (avoids IDOR/enumeration via 403).
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
 
     # Reuse a previously completed analysis instead of re-calling the AI
     # provider. Failed analyses are excluded so they remain retryable.
+    # Safe without its own owner_id filter: `document` above is already
+    # scoped to the requesting owner, so anything keyed off document.id
+    # inherits that scope.
     existing_analysis = (
         db.query(DocumentAIAnalysis)
         .filter(
@@ -293,6 +319,13 @@ def analyze_document_ai_by_id(document_id: int, db: Session) -> dict:
 
     orchestrator = DocumentProcessingOrchestrator(provider)
     analysis_result = orchestrator.run(document.text or "")
+
+    # Deterministic safety net: drop any code/number entity whose value
+    # cannot be verified against the source text, before it is persisted or
+    # returned. See entity_validation.py for the verification rules.
+    analysis_result.extracted_entities = validate_extracted_entities(
+        analysis_result.extracted_entities, document.text or ""
+    )
 
     status = "failed" if analysis_result.error_message else "completed"
     raw_response = analysis_result.raw_response or {}

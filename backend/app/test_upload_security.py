@@ -53,7 +53,7 @@ class UploadSecurityTestCase(unittest.TestCase):
     def test_normal_filename_is_saved_inside_upload_root(self):
         upload = FakeUploadFile("invoice.pdf", _valid_pdf_bytes())
 
-        document = services.save_document(upload, self.db)
+        document = services.save_document(upload, self.db, owner_id=1)
 
         saved_path = Path(document.filepath).resolve()
         self.assertEqual(saved_path.parent, self.tmp_dir.resolve())
@@ -66,7 +66,7 @@ class UploadSecurityTestCase(unittest.TestCase):
     def test_path_traversal_filename_cannot_escape_upload_root(self):
         upload = FakeUploadFile("../../../../etc/passwd.pdf", _valid_pdf_bytes())
 
-        document = services.save_document(upload, self.db)
+        document = services.save_document(upload, self.db, owner_id=1)
 
         saved_path = Path(document.filepath).resolve()
         self.assertEqual(saved_path.parent, self.tmp_dir.resolve())
@@ -79,7 +79,7 @@ class UploadSecurityTestCase(unittest.TestCase):
     def test_absolute_path_filename_cannot_escape_upload_root(self):
         upload = FakeUploadFile("/etc/passwd.pdf", _valid_pdf_bytes())
 
-        document = services.save_document(upload, self.db)
+        document = services.save_document(upload, self.db, owner_id=1)
 
         saved_path = Path(document.filepath).resolve()
         self.assertEqual(saved_path.parent, self.tmp_dir.resolve())
@@ -88,7 +88,7 @@ class UploadSecurityTestCase(unittest.TestCase):
     def test_windows_style_absolute_path_filename_is_contained(self):
         upload = FakeUploadFile("C:\\Windows\\System32\\evil.pdf", _valid_pdf_bytes())
 
-        document = services.save_document(upload, self.db)
+        document = services.save_document(upload, self.db, owner_id=1)
 
         saved_path = Path(document.filepath).resolve()
         self.assertEqual(saved_path.parent, self.tmp_dir.resolve())
@@ -96,7 +96,7 @@ class UploadSecurityTestCase(unittest.TestCase):
     def test_unusual_characters_are_sanitized(self):
         upload = FakeUploadFile('w\x00eird<>:"|?*na\x01me.pdf', _valid_pdf_bytes())
 
-        document = services.save_document(upload, self.db)
+        document = services.save_document(upload, self.db, owner_id=1)
 
         saved_path = Path(document.filepath).resolve()
         self.assertEqual(saved_path.parent, self.tmp_dir.resolve())
@@ -107,7 +107,7 @@ class UploadSecurityTestCase(unittest.TestCase):
         upload = FakeUploadFile("script.exe", b"MZ fake binary")
 
         with self.assertRaises(HTTPException) as ctx:
-            services.save_document(upload, self.db)
+            services.save_document(upload, self.db, owner_id=1)
 
         self.assertEqual(ctx.exception.status_code, 400)
         self.assertEqual(self._tmp_dir_contents(), [])
@@ -116,7 +116,7 @@ class UploadSecurityTestCase(unittest.TestCase):
         upload = FakeUploadFile("empty.pdf", b"")
 
         with self.assertRaises(HTTPException) as ctx:
-            services.save_document(upload, self.db)
+            services.save_document(upload, self.db, owner_id=1)
 
         self.assertEqual(ctx.exception.status_code, 400)
         self.assertEqual(self._tmp_dir_contents(), [])
@@ -126,7 +126,7 @@ class UploadSecurityTestCase(unittest.TestCase):
 
         with patch.object(services, "MAX_UPLOAD_SIZE_BYTES", 10):
             with self.assertRaises(HTTPException) as ctx:
-                services.save_document(upload, self.db)
+                services.save_document(upload, self.db, owner_id=1)
 
         self.assertEqual(ctx.exception.status_code, 413)
         # Partially-written file must be cleaned up, not left behind.
@@ -135,7 +135,7 @@ class UploadSecurityTestCase(unittest.TestCase):
     def test_valid_pdf_is_accepted(self):
         upload = FakeUploadFile("valid.pdf", _valid_pdf_bytes())
 
-        document = services.save_document(upload, self.db)
+        document = services.save_document(upload, self.db, owner_id=1)
 
         saved_path = Path(document.filepath).resolve()
         self.assertTrue(saved_path.exists())
@@ -145,7 +145,7 @@ class UploadSecurityTestCase(unittest.TestCase):
         upload = FakeUploadFile("fake.pdf", b"this is not a pdf, just plain text bytes")
 
         with self.assertRaises(HTTPException) as ctx:
-            services.save_document(upload, self.db)
+            services.save_document(upload, self.db, owner_id=1)
 
         self.assertEqual(ctx.exception.status_code, 400)
         # Rejected file must not be left behind on disk.
@@ -156,7 +156,7 @@ class UploadSecurityTestCase(unittest.TestCase):
         upload = FakeUploadFile("corrupt.pdf", truncated)
 
         with self.assertRaises(HTTPException) as ctx:
-            services.save_document(upload, self.db)
+            services.save_document(upload, self.db, owner_id=1)
 
         self.assertEqual(ctx.exception.status_code, 400)
         self.assertEqual(self._tmp_dir_contents(), [])

@@ -1,4 +1,5 @@
 import io
+import json
 import shutil
 import tempfile
 import unittest
@@ -12,7 +13,15 @@ from sqlalchemy.orm import sessionmaker
 
 from . import services
 from .ai_service import AIAnalysisResult
-from .models import Base, Document, DocumentAIAnalysis
+from .models import Base, Document, DocumentAIAnalysis, User
+
+
+def _create_test_user(db, external_auth_id: str = "test-user") -> User:
+    user = User(external_auth_id=external_auth_id, email=f"{external_auth_id}@example.com")
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
 
 
 class FakeUploadFile:
@@ -90,6 +99,7 @@ class UploadAnalyzePipelineIntegrationTestCase(unittest.TestCase):
         Base.metadata.create_all(bind=self.engine)
         self.SessionLocal = sessionmaker(bind=self.engine)
         self.db = self.SessionLocal()
+        self.owner_id = _create_test_user(self.db).id
 
     def tearDown(self):
         self.db.close()
@@ -100,11 +110,11 @@ class UploadAnalyzePipelineIntegrationTestCase(unittest.TestCase):
         pdf_bytes = _build_sample_pdf_bytes("Rechnung Nr. 123 fuer Test GmbH")
         upload = FakeUploadFile("Rechnung.pdf", pdf_bytes)
 
-        document = services.save_document(upload, self.db)
+        document = services.save_document(upload, self.db, owner_id=self.owner_id)
         self.assertIsNotNone(document.id)
         self.assertEqual(document.status, "uploaded")
 
-        extraction = services.analyze_document_by_id(document.id, self.db)
+        extraction = services.analyze_document_by_id(document.id, self.db, owner_id=self.owner_id)
         self.assertIn("Rechnung", extraction["text"])
         refreshed = self.db.query(Document).filter(Document.id == document.id).first()
         self.assertEqual(refreshed.status, "analyzed")
@@ -112,7 +122,7 @@ class UploadAnalyzePipelineIntegrationTestCase(unittest.TestCase):
 
         dummy_provider = DummyAIProvider()
         with patch.object(services, "get_ai_provider", return_value=dummy_provider):
-            result = services.analyze_document_ai_by_id(document.id, self.db)
+            result = services.analyze_document_ai_by_id(document.id, self.db, owner_id=self.owner_id)
 
         self.assertEqual(dummy_provider.calls, 1)
         self.assertIn("Rechnung", dummy_provider.received_text)
@@ -138,6 +148,7 @@ class DuplicateAIAnalysisPreventionTestCase(unittest.TestCase):
         Base.metadata.create_all(bind=self.engine)
         self.SessionLocal = sessionmaker(bind=self.engine)
         self.db = self.SessionLocal()
+        self.owner_id = _create_test_user(self.db).id
 
     def tearDown(self):
         self.db.close()
@@ -147,8 +158,8 @@ class DuplicateAIAnalysisPreventionTestCase(unittest.TestCase):
     def _upload_and_extract(self) -> Document:
         pdf_bytes = _build_sample_pdf_bytes("Bescheid Nr. 456 fuer Test GmbH")
         upload = FakeUploadFile("Bescheid.pdf", pdf_bytes)
-        document = services.save_document(upload, self.db)
-        services.analyze_document_by_id(document.id, self.db)
+        document = services.save_document(upload, self.db, owner_id=self.owner_id)
+        services.analyze_document_by_id(document.id, self.db, owner_id=self.owner_id)
         return document
 
     def test_first_call_invokes_provider_once_and_persists_result(self):
@@ -158,7 +169,7 @@ class DuplicateAIAnalysisPreventionTestCase(unittest.TestCase):
         dummy_provider = DummyAIProvider()
 
         with patch.object(services, "get_ai_provider", return_value=dummy_provider):
-            result = services.analyze_document_ai_by_id(document.id, self.db)
+            result = services.analyze_document_ai_by_id(document.id, self.db, owner_id=self.owner_id)
 
         self.assertEqual(dummy_provider.calls, 1)
         self.assertEqual(result["status"], "completed")
@@ -176,8 +187,8 @@ class DuplicateAIAnalysisPreventionTestCase(unittest.TestCase):
         dummy_provider = DummyAIProvider()
 
         with patch.object(services, "get_ai_provider", return_value=dummy_provider):
-            first_result = services.analyze_document_ai_by_id(document.id, self.db)
-            second_result = services.analyze_document_ai_by_id(document.id, self.db)
+            first_result = services.analyze_document_ai_by_id(document.id, self.db, owner_id=self.owner_id)
+            second_result = services.analyze_document_ai_by_id(document.id, self.db, owner_id=self.owner_id)
 
         self.assertEqual(dummy_provider.calls, 1)
         self.assertEqual(second_result, first_result)
@@ -194,8 +205,8 @@ class DuplicateAIAnalysisPreventionTestCase(unittest.TestCase):
         dummy_provider = DummyAIProvider()
 
         with patch.object(services, "get_ai_provider", return_value=dummy_provider):
-            services.analyze_document_ai_by_id(document.id, self.db)
-            cached_result = services.analyze_document_ai_by_id(document.id, self.db)
+            services.analyze_document_ai_by_id(document.id, self.db, owner_id=self.owner_id)
+            cached_result = services.analyze_document_ai_by_id(document.id, self.db, owner_id=self.owner_id)
 
         self.assertEqual(dummy_provider.calls, 1)
         self.assertEqual(cached_result["document_type"], "letter")
@@ -212,7 +223,7 @@ class DuplicateAIAnalysisPreventionTestCase(unittest.TestCase):
 
         with patch.object(services, "get_ai_provider", return_value=error_provider):
             with self.assertRaises(HTTPException):
-                services.analyze_document_ai_by_id(document.id, self.db)
+                services.analyze_document_ai_by_id(document.id, self.db, owner_id=self.owner_id)
 
         self.assertEqual(error_provider.calls, 1)
 
@@ -228,7 +239,7 @@ class DuplicateAIAnalysisPreventionTestCase(unittest.TestCase):
 
         dummy_provider = DummyAIProvider()
         with patch.object(services, "get_ai_provider", return_value=dummy_provider):
-            result = services.analyze_document_ai_by_id(document.id, self.db)
+            result = services.analyze_document_ai_by_id(document.id, self.db, owner_id=self.owner_id)
 
         self.assertEqual(dummy_provider.calls, 1)
         self.assertEqual(result["status"], "completed")
@@ -247,6 +258,7 @@ class DocumentAnalysisErrorHandlingTestCase(unittest.TestCase):
         Base.metadata.create_all(bind=self.engine)
         self.SessionLocal = sessionmaker(bind=self.engine)
         self.db = self.SessionLocal()
+        self.owner_id = _create_test_user(self.db).id
 
     def tearDown(self):
         self.db.close()
@@ -255,21 +267,23 @@ class DocumentAnalysisErrorHandlingTestCase(unittest.TestCase):
 
     def test_corrupt_file_on_disk_raises_clean_error(self):
         pdf_bytes = _build_sample_pdf_bytes("Bescheid Nr. 789")
-        document = services.save_document(FakeUploadFile("Bescheid.pdf", pdf_bytes), self.db)
+        document = services.save_document(FakeUploadFile("Bescheid.pdf", pdf_bytes), self.db, owner_id=self.owner_id)
 
         # Simulate the stored file becoming corrupted after a valid upload.
         with open(document.filepath, "wb") as corrupt_file:
             corrupt_file.write(b"not a pdf anymore")
 
         with self.assertRaises(HTTPException) as ctx:
-            services.analyze_document_by_id(document.id, self.db)
+            services.analyze_document_by_id(document.id, self.db, owner_id=self.owner_id)
 
         self.assertEqual(ctx.exception.status_code, 422)
 
     def test_missing_tesseract_binary_raises_clean_error(self):
         # Empty-text PDF triggers the OCR fallback path.
         pdf_bytes = _build_sample_pdf_bytes("")
-        document = services.save_document(FakeUploadFile("Scan.pdf", pdf_bytes), self.db)
+        document = services.save_document(
+            FakeUploadFile("Scan.pdf", pdf_bytes), self.db, owner_id=self.owner_id
+        )
 
         with patch.object(
             services.pytesseract,
@@ -277,9 +291,97 @@ class DocumentAnalysisErrorHandlingTestCase(unittest.TestCase):
             side_effect=services.pytesseract.TesseractNotFoundError(),
         ):
             with self.assertRaises(HTTPException) as ctx:
-                services.analyze_document_by_id(document.id, self.db)
+                services.analyze_document_by_id(document.id, self.db, owner_id=self.owner_id)
 
         self.assertEqual(ctx.exception.status_code, 503)
+
+
+class CorruptedEntityAIProvider:
+    """Stand-in AI provider that returns a mix of verifiable and unverifiable
+    code/number entities, simulating the qwen3:8b digit-corruption failure
+    mode observed in production (see entity_validation.py)."""
+
+    provider_name = "dummy-corrupted-entities"
+    model_name = "dummy-corrupted-entities-model"
+
+    def __init__(self):
+        self.calls = 0
+
+    def analyze_document(self, text: str) -> AIAnalysisResult:
+        self.calls += 1
+        return AIAnalysisResult(
+            document_type="letter",
+            language="de",
+            summary="Test summary",
+            turkish_explanation="Test aciklama",
+            important_dates=["2026-01-01"],
+            extracted_entities=[
+                # Correct - present verbatim in the uploaded text below.
+                {"type": "policy_or_contract_number", "value": "AD-9990001111"},
+                # Corrupted - one digit dropped relative to the source.
+                {"type": "adac_membership_number", "value": "73433034"},
+                # Reformatted, not corrupted - digits/letters unchanged, only
+                # separators differ, so this must survive validation.
+                {"type": "license_plate", "value": "BEZL37"},
+                # Out of scope for validation - must pass through untouched.
+                {"type": "customer_name", "value": "Kubilay Anything"},
+            ],
+            raw_response={"document_type": "letter"},
+        )
+
+
+class EntityValidationPipelineIntegrationTestCase(unittest.TestCase):
+    """End-to-end regression guard: a corrupted code/number entity returned
+    by the AI provider must be absent from both the persisted DB row and the
+    API response, while verifiable entities (including reformatted-but-
+    correct ones) and out-of-scope entity types are preserved. Uses an
+    isolated in-memory database and temp upload directory - the real
+    backend/briefkasten.db and backend/uploads/ are never touched."""
+
+    def setUp(self):
+        self.tmp_dir = Path(tempfile.mkdtemp(prefix="briefkasten_entity_validation_test_"))
+        self.upload_root_patcher = patch.object(services, "UPLOAD_ROOT", self.tmp_dir.resolve())
+        self.upload_root_patcher.start()
+
+        self.engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+        Base.metadata.create_all(bind=self.engine)
+        self.SessionLocal = sessionmaker(bind=self.engine)
+        self.db = self.SessionLocal()
+        self.owner_id = _create_test_user(self.db).id
+
+    def tearDown(self):
+        self.db.close()
+        self.upload_root_patcher.stop()
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def test_corrupted_entity_dropped_verifiable_entities_kept_in_db_and_response(self):
+        pdf_bytes = _build_sample_pdf_bytes(
+            "Vertrag AD-9990001111 Kennzeichen BE-ZL 37 ADAC-Mitgliedsnummer 734333034"
+        )
+        document = services.save_document(
+            FakeUploadFile("Vertrag.pdf", pdf_bytes), self.db, owner_id=self.owner_id
+        )
+        services.analyze_document_by_id(document.id, self.db, owner_id=self.owner_id)
+
+        provider = CorruptedEntityAIProvider()
+        with patch.object(services, "get_ai_provider", return_value=provider):
+            result = services.analyze_document_ai_by_id(document.id, self.db, owner_id=self.owner_id)
+
+        self.assertEqual(provider.calls, 1)
+
+        expected_entities = [
+            {"type": "policy_or_contract_number", "value": "AD-9990001111"},
+            {"type": "license_plate", "value": "BEZL37"},
+            {"type": "customer_name", "value": "Kubilay Anything"},
+        ]
+        self.assertEqual(result["extracted_entities"], expected_entities)
+
+        stored = (
+            self.db.query(DocumentAIAnalysis)
+            .filter(DocumentAIAnalysis.document_id == document.id)
+            .one()
+        )
+        self.assertEqual(json.loads(stored.extracted_entities), expected_entities)
 
 
 if __name__ == "__main__":

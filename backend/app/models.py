@@ -9,6 +9,49 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    # Supabase Auth JWT "sub" claim - the stable external identity. Never a
+    # password or credential of any kind; Supabase owns authentication.
+    external_auth_id = Column(String, unique=True, index=True, nullable=False)
+    email = Column(String, unique=True, index=True, nullable=True)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
+
+    documents = relationship("Document", back_populates="owner")
+    subscription = relationship(
+        "Subscription", back_populates="user", uselist=False, cascade="all, delete-orphan"
+    )
+
+
+class Subscription(Base):
+    __tablename__ = "subscriptions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False, index=True)
+    stripe_customer_id = Column(String, unique=True, index=True, nullable=True)
+    stripe_subscription_id = Column(String, unique=True, index=True, nullable=True)
+    plan = Column(String, nullable=False, default="free")
+    status = Column(String, nullable=False, default="inactive")
+    current_period_end = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+    user = relationship("User", back_populates="subscription")
+
+
+class ProcessedStripeEvent(Base):
+    """Idempotency ledger for Stripe webhook events - Stripe may deliver the
+    same event more than once, and each event.id must be processed at most
+    once."""
+
+    __tablename__ = "processed_stripe_events"
+
+    event_id = Column(String, primary_key=True)
+    processed_at = Column(DateTime, default=_utcnow, nullable=False)
+
+
 class Document(Base):
     __tablename__ = "documents"
 
@@ -19,7 +62,9 @@ class Document(Base):
     status = Column(String, default="uploaded", nullable=False)
     text = Column(Text, nullable=True)
     character_count = Column(Integer, nullable=True)
+    owner_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
 
+    owner = relationship("User", back_populates="documents")
     analyses = relationship(
         "DocumentAIAnalysis",
         back_populates="document",

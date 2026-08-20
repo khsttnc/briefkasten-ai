@@ -42,3 +42,21 @@ DEFAULT_ANTHROPIC_MODEL = "claude-opus-5"
 OLLAMA_BASE_URL_ENV = "OLLAMA_BASE_URL"
 OLLAMA_MODEL_ENV = "OLLAMA_MODEL"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
+
+# Supabase Auth issues user JWTs signed with this project-level secret
+# (Supabase Dashboard -> Settings -> API -> JWT Secret). No default: a
+# missing secret must fail loudly (auth.py returns 503), never silently
+# accept an unverifiable token.
+SUPABASE_JWT_SECRET_ENV = "SUPABASE_JWT_SECRET"
+
+# CORS: the single real frontend origin allowed to call this API with
+# credentials/Authorization headers - never "*" once auth is involved.
+# Defaults to the Vite dev server; production must override via env.
+FRONTEND_ORIGIN_ENV = "FRONTEND_ORIGIN"
+DEFAULT_FRONTEND_ORIGIN = "http://localhost:5173"
+
+# Stripe webhook signing secret (Stripe Dashboard -> Webhooks -> the
+# endpoint's "Signing secret"). No default: a missing secret must fail
+# loudly (billing.py returns 503), never silently accept an unverified
+# webhook payload.
+STRIPE_WEBHOOK_SECRET_ENV = "STRIPE_WEBHOOK_SECRET"
