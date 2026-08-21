@@ -15,6 +15,7 @@ from .config import TESSERACT_CMD, UPLOAD_FOLDER
 pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
 
 from .ai_service import AIService
+from .document_intelligence import derive_intelligence_fields
 from .entity_validation import validate_extracted_entities
 from .models import Document, DocumentAIAnalysis
 from .providers.provider_factory import get_ai_provider
@@ -351,6 +352,20 @@ def analyze_document_ai_by_id(document_id: int, db: Session, owner_id: int) -> d
     db.add(analysis_record)
     db.commit()
     db.refresh(analysis_record)
+
+    # Document Intelligence post-processing (priority/deadline engines).
+    # Must never take the analyze pipeline down: derive_intelligence_fields
+    # already degrades to safe defaults on missing/malformed signals or a
+    # failed LLM analysis, and a DB error here is swallowed too, so the AI
+    # analysis result computed above is still returned/raised normally.
+    try:
+        intelligence_fields = derive_intelligence_fields(raw_response)
+        for field_name, field_value in intelligence_fields.items():
+            setattr(document, field_name, field_value)
+        db.add(document)
+        db.commit()
+    except Exception:
+        db.rollback()
 
     response = {
         "analysis_id": analysis_record.id,

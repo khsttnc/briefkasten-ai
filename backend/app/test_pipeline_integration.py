@@ -384,5 +384,93 @@ class EntityValidationPipelineIntegrationTestCase(unittest.TestCase):
         self.assertEqual(json.loads(stored.extracted_entities), expected_entities)
 
 
+class DocumentIntelligencePostProcessingTestCase(unittest.TestCase):
+    """Verifies the Step 3 wiring: the priority/deadline engines run after a
+    successful or failed AI analysis and populate Document, but can never
+    take the analyze pipeline down - even a completely broken
+    derive_intelligence_fields must still let the existing response/
+    HTTPException behavior through unchanged. Uses an isolated in-memory
+    database and temp upload directory - the real backend/briefkasten.db and
+    backend/uploads/ are never touched."""
+
+    def setUp(self):
+        self.tmp_dir = Path(tempfile.mkdtemp(prefix="briefkasten_doc_intelligence_test_"))
+        self.upload_root_patcher = patch.object(services, "UPLOAD_ROOT", self.tmp_dir.resolve())
+        self.upload_root_patcher.start()
+
+        self.engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+        Base.metadata.create_all(bind=self.engine)
+        self.SessionLocal = sessionmaker(bind=self.engine)
+        self.db = self.SessionLocal()
+        self.owner_id = _create_test_user(self.db).id
+
+    def tearDown(self):
+        self.db.close()
+        self.upload_root_patcher.stop()
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def _upload_and_extract(self, text: str = "Bescheid Nr. 999 fuer Test GmbH") -> Document:
+        pdf_bytes = _build_sample_pdf_bytes(text)
+        upload = FakeUploadFile("Bescheid.pdf", pdf_bytes)
+        document = services.save_document(upload, self.db, owner_id=self.owner_id)
+        services.analyze_document_by_id(document.id, self.db, owner_id=self.owner_id)
+        return document
+
+    def test_successful_analysis_without_signal_keys_gets_safe_default_fields(self):
+        # DummyAIProvider's raw_response has no Document Intelligence signal
+        # keys yet (the prompt update is a later step) - must not crash, and
+        # must populate the safe-default fields rather than leave garbage.
+        document = self._upload_and_extract()
+        dummy_provider = DummyAIProvider()
+
+        with patch.object(services, "get_ai_provider", return_value=dummy_provider):
+            result = services.analyze_document_ai_by_id(document.id, self.db, owner_id=self.owner_id)
+
+        self.assertEqual(result["status"], "completed")
+
+        refreshed = self.db.query(Document).filter(Document.id == document.id).first()
+        self.assertEqual(refreshed.deadline_type, "none")
+        self.assertEqual(refreshed.deadline_certainty, "exact")
+        self.assertEqual(refreshed.priority_level, "low")
+        self.assertFalse(refreshed.requires_action)
+
+    def test_failed_analysis_still_raises_and_still_gets_safe_default_fields(self):
+        # A failed LLM analysis is exactly the case Step 3 was asked to
+        # handle: the existing 502 behavior must be unaffected, and the
+        # engines must still run safely on the (signal-less) raw_response.
+        document = self._upload_and_extract()
+        error_provider = ErrorAIProvider()
+
+        with patch.object(services, "get_ai_provider", return_value=error_provider):
+            with self.assertRaises(HTTPException) as ctx:
+                services.analyze_document_ai_by_id(document.id, self.db, owner_id=self.owner_id)
+
+        self.assertEqual(ctx.exception.status_code, 502)
+
+        refreshed = self.db.query(Document).filter(Document.id == document.id).first()
+        self.assertEqual(refreshed.deadline_type, "none")
+        self.assertEqual(refreshed.priority_level, "low")
+
+    def test_broken_intelligence_post_processing_does_not_break_the_pipeline(self):
+        # Simulates a completely broken post-processing step (e.g. a future
+        # engine regression) - the analyze endpoint must still return its
+        # normal, successful response.
+        document = self._upload_and_extract()
+        dummy_provider = DummyAIProvider()
+
+        with patch.object(services, "get_ai_provider", return_value=dummy_provider), patch.object(
+            services, "derive_intelligence_fields", side_effect=RuntimeError("engine exploded")
+        ):
+            result = services.analyze_document_ai_by_id(document.id, self.db, owner_id=self.owner_id)
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["summary"], "Test summary")
+
+        # Post-processing failed and rolled back - fields stay unset rather
+        # than the pipeline erroring out.
+        refreshed = self.db.query(Document).filter(Document.id == document.id).first()
+        self.assertIsNone(refreshed.priority_level)
+
+
 if __name__ == "__main__":
     unittest.main()
