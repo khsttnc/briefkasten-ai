@@ -1,0 +1,4 @@
+# TODO
+
+- **Option B for deadline extraction** (Document Intelligence layer): replace the single `deadline_raw_text` field with a list of extracted deadlines, so `priority_engine` can pick the most urgent/legally significant one deterministically instead of relying on the LLM to pick one phrase via prompt instructions (current Option A). Requires a schema change. See the `multiple_deadlines_detected` fix (commit `f80c8c9`) for why: qwen3:8b did not reliably follow the Option A prompt rule in manual testing.
+- **Frontend has no auth/session wiring.** None of `frontend/src/api.ts`'s fetch calls (upload, analyze, documents, documents/summary) send an `Authorization` header, so every backend endpoint currently 401s from the real app. Pre-existing gap, not introduced by the Document Intelligence work - needs a Supabase Auth client + session/token handling in the frontend.
