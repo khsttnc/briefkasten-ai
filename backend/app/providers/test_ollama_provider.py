@@ -210,6 +210,17 @@ class DocumentIntelligenceSignalKeysTestCase(unittest.TestCase):
             prompt = _build_ollama_prompt("text", task=task)
             self.assertNotIn(document_intelligence.CLASSIFIED_DOCUMENT_TYPE_KEY, prompt)
 
+    def test_prompt_prioritizes_objection_deadline_over_payment_deadline(self):
+        # Option A fix (review): when multiple deadlines are present, the
+        # prompt must tell the model to always pick the
+        # objection/appeal deadline over a payment deadline for
+        # deadline_raw_text - a silently-picked deadline is exactly the
+        # bug being guarded against here.
+        prompt = _build_ollama_prompt("Some German document text", task=None)
+        self.assertIn(document_intelligence.MULTIPLE_DEADLINES_DETECTED_KEY, prompt)
+        self.assertIn("Widerspruch", prompt)
+        self.assertIn("outranks a payment deadline", prompt)
+
 
 if __name__ == '__main__':
     unittest.main()

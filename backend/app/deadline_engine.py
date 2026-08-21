@@ -142,6 +142,8 @@ def _parse_relative_duration_months(text: str) -> Optional[int]:
 def resolve_deadline(
     deadline_raw_text: Optional[str],
     document_date: Optional[date] = None,
+    *,
+    multiple_deadlines_detected: bool = False,
 ) -> DeadlineResult:
     """Turn an LLM-extracted raw deadline phrase into a deterministic
     deadline_type/deadline_certainty/deadline_estimated_date triple.
@@ -150,7 +152,33 @@ def resolve_deadline(
     document_date, or text that mentions a deadline but doesn't match a
     recognized pattern, is reported as unknown_needs_review rather than
     guessed.
+
+    multiple_deadlines_detected is a signal from the LLM that the source
+    text contains more than one distinct deadline/response-period phrase
+    (e.g. a payment deadline and a separate Widerspruch/appeal deadline).
+    deadline_raw_text is expected to already be the single phrase the
+    caller picked (by policy: the one with the heavier legal consequence -
+    see the Ollama prompt), but which one is genuinely "the" deadline is
+    then ambiguous even if that phrase itself parses cleanly - so any
+    would-be exact/estimated result is downgraded to
+    unknown_needs_review/no date instead, the same fail-closed treatment
+    as an unparseable phrase.
     """
+    result = _resolve_single_deadline(deadline_raw_text, document_date)
+    if multiple_deadlines_detected and result.deadline_certainty != "unknown_needs_review":
+        return DeadlineResult(
+            deadline_raw_text=result.deadline_raw_text,
+            deadline_type=result.deadline_type,
+            deadline_certainty="unknown_needs_review",
+            deadline_estimated_date=None,
+        )
+    return result
+
+
+def _resolve_single_deadline(
+    deadline_raw_text: Optional[str],
+    document_date: Optional[date],
+) -> DeadlineResult:
     text = (deadline_raw_text or "").strip()
 
     if not text:

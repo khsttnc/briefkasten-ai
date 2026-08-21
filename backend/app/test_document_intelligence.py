@@ -88,6 +88,35 @@ class FullValidPayloadTestCase(unittest.TestCase):
         self.assertEqual(fields["priority_level"], "high")
 
 
+class MultipleDeadlinesSignalTestCase(unittest.TestCase):
+    """Option A from review: multiple_deadlines_detected must flow through
+    to resolve_deadline() and downgrade an otherwise-confident date, and
+    the resulting unknown_needs_review certainty must still bump the
+    priority score the same way an unparseable deadline does."""
+
+    def test_true_flag_downgrades_an_otherwise_exact_date(self):
+        fields = derive_intelligence_fields(
+            {
+                "deadline_raw_text": "bis zum 15.09.2026",
+                "multiple_deadlines_detected": True,
+            }
+        )
+        self.assertEqual(fields["deadline_type"], "absolute")
+        self.assertEqual(fields["deadline_certainty"], "unknown_needs_review")
+        self.assertIsNone(fields["deadline_estimated_date"])
+
+    def test_missing_flag_defaults_to_false_and_does_not_downgrade(self):
+        fields = derive_intelligence_fields({"deadline_raw_text": "bis zum 15.09.2026"})
+        self.assertEqual(fields["deadline_certainty"], "exact")
+        self.assertEqual(fields["deadline_estimated_date"], date(2026, 9, 15))
+
+    def test_non_bool_flag_value_is_treated_as_false(self):
+        fields = derive_intelligence_fields(
+            {"deadline_raw_text": "bis zum 15.09.2026", "multiple_deadlines_detected": "true"}
+        )
+        self.assertEqual(fields["deadline_certainty"], "exact")
+
+
 class EngineFailureIsolationTestCase(unittest.TestCase):
     """Even if a downstream engine misbehaves unexpectedly, this module must
     still return a safe, complete result rather than propagate."""

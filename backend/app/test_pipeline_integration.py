@@ -579,5 +579,103 @@ class DocumentIntelligenceFullSignalPipelineTestCase(unittest.TestCase):
         self.assertEqual(stored_analysis.document_type, "letter")
 
 
+class MultipleDeadlinesAIProvider:
+    """Stand-in AI provider mirroring the real qwen3:8b behavior observed
+    in the Step 4 manual end-to-end check: the sample Jobcenter document
+    actually contained two distinct deadlines (a 14-day income-change
+    report and a separate 1-month Widerspruch period). Per the Option A
+    fix, the model is expected to flag multiple_deadlines_detected=true
+    and still pick the higher-priority (objection) phrase for
+    deadline_raw_text."""
+
+    provider_name = "dummy-multiple-deadlines"
+    model_name = "dummy-multiple-deadlines-model"
+
+    def __init__(self):
+        self.calls = 0
+
+    def analyze_document(self, text: str) -> AIAnalysisResult:
+        self.calls += 1
+        raw_response = {
+            "document_type": "letter",
+            "language": "de",
+            "summary": "Aenderungsbescheid mit Melde- und Widerspruchsfrist.",
+            "turkish_explanation": "Belgede iki farkli sure var.",
+            "important_dates": ["2026-01-10"],
+            "extracted_entities": [],
+            "sender_category": "Behörde",
+            "sender_institution": "Jobcenter Berlin Mitte",
+            "classified_document_type": "Änderungsbescheid",
+            # Higher-priority phrase per the prompt's ordering rule -
+            # objection deadline, not the payment/report deadline.
+            "deadline_raw_text": "innerhalb eines Monats nach Bekanntgabe Widerspruch einlegen",
+            "document_date": "2026-01-10",
+            "requires_action": True,
+            "payment_requested": False,
+            "objection_right_mentioned": True,
+            "action_summary": "Belgede birden fazla sure tespit edildi, dikkatlice kontrol edin.",
+            "multiple_deadlines_detected": True,
+        }
+        return AIAnalysisResult(
+            document_type="letter",
+            language="de",
+            summary=raw_response["summary"],
+            turkish_explanation=raw_response["turkish_explanation"],
+            important_dates=raw_response["important_dates"],
+            extracted_entities=[],
+            raw_response=raw_response,
+        )
+
+
+class MultipleDeadlinesPipelineTestCase(unittest.TestCase):
+    """Option A fix (review): a document with more than one distinct
+    deadline must not silently resolve to a single confident date -
+    deadline_certainty must come out unknown_needs_review even though the
+    chosen phrase itself parses cleanly, and the elevated uncertainty must
+    still be reflected in priority_level. Uses an isolated in-memory
+    database and temp upload directory - the real backend/briefkasten.db
+    and backend/uploads/ are never touched."""
+
+    def setUp(self):
+        self.tmp_dir = Path(tempfile.mkdtemp(prefix="briefkasten_multi_deadline_test_"))
+        self.upload_root_patcher = patch.object(services, "UPLOAD_ROOT", self.tmp_dir.resolve())
+        self.upload_root_patcher.start()
+
+        self.engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+        Base.metadata.create_all(bind=self.engine)
+        self.SessionLocal = sessionmaker(bind=self.engine)
+        self.db = self.SessionLocal()
+        self.owner_id = _create_test_user(self.db).id
+
+    def tearDown(self):
+        self.db.close()
+        self.upload_root_patcher.stop()
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def test_multiple_deadlines_signal_downgrades_certainty_and_raises_priority(self):
+        pdf_bytes = _build_sample_pdf_bytes("Aenderungsbescheid mit zwei Fristen")
+        document = services.save_document(
+            FakeUploadFile("Aenderungsbescheid.pdf", pdf_bytes), self.db, owner_id=self.owner_id
+        )
+        services.analyze_document_by_id(document.id, self.db, owner_id=self.owner_id)
+
+        provider = MultipleDeadlinesAIProvider()
+        with patch.object(services, "get_ai_provider", return_value=provider):
+            result = services.analyze_document_ai_by_id(document.id, self.db, owner_id=self.owner_id)
+
+        self.assertEqual(result["status"], "completed")
+
+        refreshed = self.db.query(Document).filter(Document.id == document.id).first()
+        # Would otherwise be "relative"/"estimated" with a computed date -
+        # multiple_deadlines_detected must force unknown_needs_review/None.
+        self.assertEqual(refreshed.deadline_type, "relative")
+        self.assertEqual(refreshed.deadline_certainty, "unknown_needs_review")
+        self.assertIsNone(refreshed.deadline_estimated_date)
+        self.assertIn("birden fazla sure", refreshed.action_summary)
+        # Behörde(2) + Änderungsbescheid(2) + objection(1) + relative(1)
+        # + unresolved-deadline bump(1) = 7 -> critical
+        self.assertEqual(refreshed.priority_level, "critical")
+
+
 if __name__ == "__main__":
     unittest.main()

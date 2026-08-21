@@ -38,6 +38,15 @@ REQUIRES_ACTION_KEY = "requires_action"
 PAYMENT_REQUESTED_KEY = "payment_requested"
 OBJECTION_RIGHT_KEY = "objection_right_mentioned"
 ACTION_SUMMARY_KEY = "action_summary"
+# True when the source text contains more than one distinct deadline/
+# response-period phrase (e.g. a payment deadline and a separate
+# Widerspruch/appeal deadline). deadline_raw_text is still expected to be
+# the single phrase with the heavier legal consequence in that case (see
+# the Ollama prompt's ordering rule), but resolve_deadline() uses this flag
+# to downgrade the result to unknown_needs_review regardless - which
+# phrase is genuinely "the" deadline is inherently ambiguous when more
+# than one is present, even if the chosen phrase itself parses cleanly.
+MULTIPLE_DEADLINES_DETECTED_KEY = "multiple_deadlines_detected"
 
 SIGNAL_KEYS = (
     SENDER_CATEGORY_KEY,
@@ -49,6 +58,7 @@ SIGNAL_KEYS = (
     PAYMENT_REQUESTED_KEY,
     OBJECTION_RIGHT_KEY,
     ACTION_SUMMARY_KEY,
+    MULTIPLE_DEADLINES_DETECTED_KEY,
 )
 
 
@@ -111,8 +121,13 @@ def derive_intelligence_fields(raw_response: Optional[Dict[str, Any]]) -> Dict[s
         payment_requested = _safe_bool(payload.get(PAYMENT_REQUESTED_KEY))
         objection_right_mentioned = _safe_bool(payload.get(OBJECTION_RIGHT_KEY))
         action_summary = _safe_str(payload.get(ACTION_SUMMARY_KEY))
+        multiple_deadlines_detected = _safe_bool(payload.get(MULTIPLE_DEADLINES_DETECTED_KEY))
 
-        deadline = resolve_deadline(deadline_raw_text, document_date)
+        deadline = resolve_deadline(
+            deadline_raw_text,
+            document_date,
+            multiple_deadlines_detected=multiple_deadlines_detected,
+        )
         priority = classify_priority(
             PriorityInput(
                 sender_category=sender_category,

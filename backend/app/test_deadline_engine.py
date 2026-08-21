@@ -90,5 +90,46 @@ class NoOrUnclearDeadlineTestCase(unittest.TestCase):
         self.assertEqual(result.deadline_raw_text, raw)
 
 
+class MultipleDeadlinesDetectedTestCase(unittest.TestCase):
+    """Option A from review: a document with more than one distinct
+    deadline phrase must never silently resolve to a single confident
+    date - it degrades to unknown_needs_review even if the chosen phrase
+    itself parses cleanly, same fail-closed treatment as an unparseable
+    phrase."""
+
+    def test_downgrades_an_otherwise_exact_absolute_date(self):
+        result = resolve_deadline("bis zum 15.09.2026", multiple_deadlines_detected=True)
+        self.assertEqual(result.deadline_type, "absolute")
+        self.assertEqual(result.deadline_certainty, "unknown_needs_review")
+        self.assertIsNone(result.deadline_estimated_date)
+
+    def test_downgrades_an_otherwise_estimated_relative_date(self):
+        result = resolve_deadline(
+            "innerhalb von 14 Tagen",
+            document_date=date(2026, 1, 10),
+            multiple_deadlines_detected=True,
+        )
+        self.assertEqual(result.deadline_type, "relative")
+        self.assertEqual(result.deadline_certainty, "unknown_needs_review")
+        self.assertIsNone(result.deadline_estimated_date)
+
+    def test_already_unresolved_relative_deadline_is_unaffected(self):
+        # No document_date -> already unknown_needs_review regardless of the
+        # flag; must not change shape further.
+        without_flag = resolve_deadline("innerhalb von 14 Tagen")
+        with_flag = resolve_deadline("innerhalb von 14 Tagen", multiple_deadlines_detected=True)
+        self.assertEqual(without_flag, with_flag)
+
+    def test_false_flag_does_not_change_a_single_clean_deadline(self):
+        result = resolve_deadline("bis zum 15.09.2026", multiple_deadlines_detected=False)
+        self.assertEqual(result.deadline_certainty, "exact")
+        self.assertEqual(result.deadline_estimated_date, date(2026, 9, 15))
+
+    def test_raw_text_still_passed_through_when_downgraded(self):
+        raw = "bis zum 15.09.2026"
+        result = resolve_deadline(raw, multiple_deadlines_detected=True)
+        self.assertEqual(result.deadline_raw_text, raw)
+
+
 if __name__ == "__main__":
     unittest.main()

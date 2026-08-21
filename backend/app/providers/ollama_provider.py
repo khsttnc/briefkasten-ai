@@ -13,6 +13,7 @@ from ..document_intelligence import (
     CLASSIFIED_DOCUMENT_TYPE_KEY,
     DEADLINE_RAW_TEXT_KEY,
     DOCUMENT_DATE_KEY,
+    MULTIPLE_DEADLINES_DETECTED_KEY,
     OBJECTION_RIGHT_KEY,
     PAYMENT_REQUESTED_KEY,
     REQUIRES_ACTION_KEY,
@@ -176,16 +177,27 @@ def _build_ollama_prompt(text: str, task: Optional[str] = None) -> str:
         f"{DEADLINE_RAW_TEXT_KEY} is the exact phrase from the text stating a deadline or response "
         "period (for example \"bis zum 15.09.2026\" or \"innerhalb von 14 Tagen\"), copied "
         "verbatim - never invent, paraphrase, or compute one. Use null if no deadline is mentioned. "
+        "If the text contains more than one distinct deadline/response-period phrase (for example "
+        "a payment deadline AND a separate objection/appeal deadline), you MUST set "
+        f"{MULTIPLE_DEADLINES_DETECTED_KEY} to true, and {DEADLINE_RAW_TEXT_KEY} must still be "
+        "exactly one verbatim phrase, chosen by this fixed priority order: an objection/appeal "
+        "deadline (Widerspruch, Einspruch, Rechtsbehelf) always outranks a payment deadline, which "
+        "always outranks any other kind of deadline. If only one deadline/response-period phrase "
+        f"is present, {MULTIPLE_DEADLINES_DETECTED_KEY} must be false. When "
+        f"{MULTIPLE_DEADLINES_DETECTED_KEY} is true, {ACTION_SUMMARY_KEY} must explicitly say (in "
+        "Turkish) that more than one deadline was found in the document and the reader should "
+        "check it carefully themselves. "
         f"{DOCUMENT_DATE_KEY} is the date printed on the document itself (near a label such as "
         "\"Datum\" or \"Bescheid vom\"), formatted YYYY-MM-DD, only if that exact date is present "
         "in the text - never guess, compute, or use today's date. Use null if no such date is "
         "found. "
-        f"{REQUIRES_ACTION_KEY}, {PAYMENT_REQUESTED_KEY}, and {OBJECTION_RIGHT_KEY} must each be "
-        f"the JSON boolean true or false, never a string: {REQUIRES_ACTION_KEY} is true only if "
-        "the reader must do something (respond, pay, submit documents, appeal); "
-        f"{PAYMENT_REQUESTED_KEY} is true only if the text demands a payment; "
-        f"{OBJECTION_RIGHT_KEY} is true only if the text mentions a right to object or appeal "
-        "(Widerspruch, Einspruch, Rechtsbehelf). "
+        f"{REQUIRES_ACTION_KEY}, {PAYMENT_REQUESTED_KEY}, {OBJECTION_RIGHT_KEY}, and "
+        f"{MULTIPLE_DEADLINES_DETECTED_KEY} must each be the JSON boolean true or false, never a "
+        f"string: {REQUIRES_ACTION_KEY} is true only if the reader must do something (respond, "
+        f"pay, submit documents, appeal); {PAYMENT_REQUESTED_KEY} is true only if the text demands "
+        f"a payment; {OBJECTION_RIGHT_KEY} is true only if the text mentions a right to object or "
+        f"appeal (Widerspruch, Einspruch, Rechtsbehelf); {MULTIPLE_DEADLINES_DETECTED_KEY} is as "
+        "defined above. "
         f"{ACTION_SUMMARY_KEY} is a short summary, at most about 20 words, IN TURKISH, of what the "
         f"reader needs to do. Use null if {REQUIRES_ACTION_KEY} is false. "
         "Do not include any additional text or explanation. "
