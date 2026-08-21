@@ -17,20 +17,39 @@ from typing import Any, Dict, Optional
 from .deadline_engine import resolve_deadline
 from .priority_engine import PriorityInput, classify_priority
 
-# Keys the LLM prompt is expected to populate inside raw_response (wired up
-# in a later step). classified_document_type is deliberately NOT the
-# existing "document_type" key - that one is DocumentAIAnalysis's free-form
-# LLM label and must stay untouched; this is the separate, deterministic-
-# taxonomy-facing value the priority engine reads.
-_SENDER_CATEGORY_KEY = "sender_category"
-_SENDER_INSTITUTION_KEY = "sender_institution"
-_CLASSIFIED_DOCUMENT_TYPE_KEY = "classified_document_type"
-_DEADLINE_RAW_TEXT_KEY = "deadline_raw_text"
-_DOCUMENT_DATE_KEY = "document_date"
-_REQUIRES_ACTION_KEY = "requires_action"
-_PAYMENT_REQUESTED_KEY = "payment_requested"
-_OBJECTION_RIGHT_KEY = "objection_right_mentioned"
-_ACTION_SUMMARY_KEY = "action_summary"
+# Keys the LLM prompt is expected to populate inside raw_response.
+# classified_document_type is deliberately NOT the existing "document_type"
+# key - that one is DocumentAIAnalysis's free-form LLM label and must stay
+# untouched; this is the separate, deterministic-taxonomy-facing value the
+# priority engine reads.
+#
+# Public (no leading underscore) on purpose: a provider's prompt-building
+# code (see providers/ollama_provider.py) imports these instead of
+# re-typing the literal strings, so a rename here can't silently drift out
+# of sync with what the LLM is actually asked to produce - a key-name typo
+# in only one of the two places would otherwise still pass every unit test
+# here while always producing the safe low/unknown fallback in real use.
+SENDER_CATEGORY_KEY = "sender_category"
+SENDER_INSTITUTION_KEY = "sender_institution"
+CLASSIFIED_DOCUMENT_TYPE_KEY = "classified_document_type"
+DEADLINE_RAW_TEXT_KEY = "deadline_raw_text"
+DOCUMENT_DATE_KEY = "document_date"
+REQUIRES_ACTION_KEY = "requires_action"
+PAYMENT_REQUESTED_KEY = "payment_requested"
+OBJECTION_RIGHT_KEY = "objection_right_mentioned"
+ACTION_SUMMARY_KEY = "action_summary"
+
+SIGNAL_KEYS = (
+    SENDER_CATEGORY_KEY,
+    SENDER_INSTITUTION_KEY,
+    CLASSIFIED_DOCUMENT_TYPE_KEY,
+    DEADLINE_RAW_TEXT_KEY,
+    DOCUMENT_DATE_KEY,
+    REQUIRES_ACTION_KEY,
+    PAYMENT_REQUESTED_KEY,
+    OBJECTION_RIGHT_KEY,
+    ACTION_SUMMARY_KEY,
+)
 
 
 def _safe_str(value: Any) -> Optional[str]:
@@ -83,15 +102,15 @@ def derive_intelligence_fields(raw_response: Optional[Dict[str, Any]]) -> Dict[s
     try:
         payload = raw_response if isinstance(raw_response, dict) else {}
 
-        sender_category = _safe_str(payload.get(_SENDER_CATEGORY_KEY))
-        sender_institution = _safe_str(payload.get(_SENDER_INSTITUTION_KEY))
-        classified_document_type = _safe_str(payload.get(_CLASSIFIED_DOCUMENT_TYPE_KEY))
-        deadline_raw_text = _safe_str(payload.get(_DEADLINE_RAW_TEXT_KEY))
-        document_date = _safe_document_date(payload.get(_DOCUMENT_DATE_KEY))
-        requires_action = _safe_bool(payload.get(_REQUIRES_ACTION_KEY))
-        payment_requested = _safe_bool(payload.get(_PAYMENT_REQUESTED_KEY))
-        objection_right_mentioned = _safe_bool(payload.get(_OBJECTION_RIGHT_KEY))
-        action_summary = _safe_str(payload.get(_ACTION_SUMMARY_KEY))
+        sender_category = _safe_str(payload.get(SENDER_CATEGORY_KEY))
+        sender_institution = _safe_str(payload.get(SENDER_INSTITUTION_KEY))
+        classified_document_type = _safe_str(payload.get(CLASSIFIED_DOCUMENT_TYPE_KEY))
+        deadline_raw_text = _safe_str(payload.get(DEADLINE_RAW_TEXT_KEY))
+        document_date = _safe_document_date(payload.get(DOCUMENT_DATE_KEY))
+        requires_action = _safe_bool(payload.get(REQUIRES_ACTION_KEY))
+        payment_requested = _safe_bool(payload.get(PAYMENT_REQUESTED_KEY))
+        objection_right_mentioned = _safe_bool(payload.get(OBJECTION_RIGHT_KEY))
+        action_summary = _safe_str(payload.get(ACTION_SUMMARY_KEY))
 
         deadline = resolve_deadline(deadline_raw_text, document_date)
         priority = classify_priority(

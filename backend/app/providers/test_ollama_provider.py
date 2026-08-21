@@ -2,6 +2,7 @@ import json
 import unittest
 from unittest.mock import patch, MagicMock
 
+from .. import document_intelligence
 from ..ai_service import AIAnalysisResult
 from . import ollama_provider as ollama_provider_module
 from .ollama_provider import OllamaProvider, _build_ollama_prompt
@@ -49,6 +50,23 @@ class TestOllamaProvider(unittest.TestCase):
         self.assertEqual(result.turkish_explanation, 'Açıklama')
         self.assertEqual(result.important_dates, ['2026-08-08'])
         self.assertEqual(result.extracted_entities, [{'name': 'Firma'}])
+
+    @patch.dict('os.environ', {'OLLAMA_MODEL': 'test-model'})
+    @patch('backend.app.providers.ollama_provider.urllib.request.urlopen')
+    def test_ollama_provider_mid_response_timeout_is_handled_cleanly(self, mock_urlopen):
+        # Regression guard: observed in real testing against qwen3:8b - a
+        # timeout that happens mid-response (inside getresponse()/read(),
+        # after the connection succeeded) raises a bare TimeoutError, not
+        # urllib.error.URLError. Before the fix this propagated all the way
+        # out of analyze_document() uncaught, which would have crashed the
+        # analyze endpoint instead of producing a clean failed analysis.
+        mock_urlopen.side_effect = TimeoutError("timed out")
+
+        provider = OllamaProvider()
+        result = provider.analyze_document('Test text')
+
+        self.assertIsNotNone(result.error_message)
+        self.assertIn('timed out', result.error_message)
 
     @patch.dict('os.environ', {'OLLAMA_MODEL': 'test-model'})
     @patch('backend.app.providers.ollama_provider.urllib.request.urlopen')
@@ -165,6 +183,32 @@ class TestBuildOllamaPrompt(unittest.TestCase):
 
         self.assertNotIn("TURKISH", classification_prompt)
         self.assertNotIn("TURKISH", extraction_prompt)
+
+
+class DocumentIntelligenceSignalKeysTestCase(unittest.TestCase):
+    """Regression guard for the exact failure mode flagged during review: a
+    typo'd key name in the prompt would still pass every test that only
+    checks the prompt in isolation, while silently making
+    derive_intelligence_fields() always fall back to its safe low/unknown
+    default in real use. These tests import the actual
+    document_intelligence.SIGNAL_KEYS constants (the same ones
+    derive_intelligence_fields reads raw_response by) instead of retyping
+    the key names, so a rename on either side fails this test rather than
+    drifting silently."""
+
+    def test_default_prompt_requests_every_signal_key_by_its_exact_name(self):
+        prompt = _build_ollama_prompt("Some German document text", task=None)
+        for key in document_intelligence.SIGNAL_KEYS:
+            self.assertIn(key, prompt, f"prompt is missing the exact signal key '{key}'")
+
+    def test_task_specific_prompts_do_not_need_signal_keys(self):
+        # classification/extraction/explanation are split sub-prompts not
+        # used by the live single-call pipeline (see
+        # DocumentProcessingOrchestrator.run) - documenting the current
+        # scope, not a requirement that they carry these keys too.
+        for task in ("classification", "extraction", "explanation"):
+            prompt = _build_ollama_prompt("text", task=task)
+            self.assertNotIn(document_intelligence.CLASSIFIED_DOCUMENT_TYPE_KEY, prompt)
 
 
 if __name__ == '__main__':

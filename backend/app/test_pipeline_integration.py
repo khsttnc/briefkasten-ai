@@ -472,5 +472,112 @@ class DocumentIntelligencePostProcessingTestCase(unittest.TestCase):
         self.assertIsNone(refreshed.priority_level)
 
 
+class JobcenterAenderungsbescheidAIProvider:
+    """Stand-in AI provider whose raw_response mimics what the Step 4
+    Ollama prompt asks the model to return for a real Jobcenter
+    Änderungsbescheid (change notice) - the exact key names
+    derive_intelligence_fields() reads, populated as a real qwen3:8b
+    response would populate them."""
+
+    provider_name = "dummy-jobcenter"
+    model_name = "dummy-jobcenter-model"
+
+    def __init__(self):
+        self.calls = 0
+
+    def analyze_document(self, text: str) -> AIAnalysisResult:
+        self.calls += 1
+        raw_response = {
+            "document_type": "letter",
+            "language": "de",
+            "summary": "Aenderung der Leistungshoehe ab naechstem Monat.",
+            "turkish_explanation": "Odeneginiz gelecek aydan itibaren degisiyor.",
+            "important_dates": ["2026-01-10"],
+            "extracted_entities": [],
+            "sender_category": "Behörde",
+            "sender_institution": "Jobcenter Berlin Mitte",
+            "classified_document_type": "Änderungsbescheid",
+            "deadline_raw_text": "innerhalb von 14 Tagen",
+            "document_date": "2026-01-10",
+            "requires_action": True,
+            "payment_requested": False,
+            "objection_right_mentioned": True,
+            "action_summary": "Widerspruch einlegen falls Betrag falsch berechnet wurde.",
+        }
+        return AIAnalysisResult(
+            document_type="letter",
+            language="de",
+            summary=raw_response["summary"],
+            turkish_explanation=raw_response["turkish_explanation"],
+            important_dates=raw_response["important_dates"],
+            extracted_entities=[],
+            raw_response=raw_response,
+        )
+
+
+class DocumentIntelligenceFullSignalPipelineTestCase(unittest.TestCase):
+    """End-to-end (provider -> services -> Document row) check that a fully
+    populated, correctly-keyed raw_response - the shape the Step 4 prompt
+    asks qwen3:8b for - results in the expected deterministic
+    classification, not just the safe-default fallback. Complements (does
+    not replace) the manual real-Ollama check described in the Step 4
+    summary. Uses an isolated in-memory database and temp upload directory
+    - the real backend/briefkasten.db and backend/uploads/ are never
+    touched."""
+
+    def setUp(self):
+        self.tmp_dir = Path(tempfile.mkdtemp(prefix="briefkasten_full_signal_test_"))
+        self.upload_root_patcher = patch.object(services, "UPLOAD_ROOT", self.tmp_dir.resolve())
+        self.upload_root_patcher.start()
+
+        self.engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+        Base.metadata.create_all(bind=self.engine)
+        self.SessionLocal = sessionmaker(bind=self.engine)
+        self.db = self.SessionLocal()
+        self.owner_id = _create_test_user(self.db).id
+
+    def tearDown(self):
+        self.db.close()
+        self.upload_root_patcher.stop()
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def test_full_jobcenter_signals_produce_expected_classification(self):
+        pdf_bytes = _build_sample_pdf_bytes("Aenderungsbescheid Jobcenter Berlin Mitte")
+        document = services.save_document(
+            FakeUploadFile("Aenderungsbescheid.pdf", pdf_bytes), self.db, owner_id=self.owner_id
+        )
+        services.analyze_document_by_id(document.id, self.db, owner_id=self.owner_id)
+
+        provider = JobcenterAenderungsbescheidAIProvider()
+        with patch.object(services, "get_ai_provider", return_value=provider):
+            result = services.analyze_document_ai_by_id(document.id, self.db, owner_id=self.owner_id)
+
+        self.assertEqual(result["status"], "completed")
+
+        refreshed = self.db.query(Document).filter(Document.id == document.id).first()
+        self.assertEqual(refreshed.sender_category, "Behörde")
+        self.assertEqual(refreshed.sender_institution, "Jobcenter Berlin Mitte")
+        self.assertEqual(refreshed.document_type, "Änderungsbescheid")
+        self.assertEqual(refreshed.deadline_type, "relative")
+        self.assertEqual(refreshed.deadline_certainty, "estimated")
+        # deemed delivery: 2026-01-10 + 4 = 2026-01-14; +14 days = 2026-01-28
+        # (deadline_estimated_date is a DateTime column, so it round-trips
+        # through SQLite as a datetime, not a bare date)
+        self.assertEqual(refreshed.deadline_estimated_date.date().isoformat(), "2026-01-28")
+        self.assertTrue(refreshed.requires_action)
+        self.assertIn("Widerspruch", refreshed.action_summary)
+        # Behörde(2) + Änderungsbescheid(2) + objection(1) + relative(1) = 6 -> high
+        self.assertEqual(refreshed.priority_level, "high")
+
+        # DocumentAIAnalysis.document_type stays the LLM's own free-form
+        # label - untouched by the deterministic classified_document_type.
+        stored_analysis = (
+            self.db.query(DocumentAIAnalysis)
+            .filter(DocumentAIAnalysis.document_id == document.id)
+            .one()
+        )
+        self.assertEqual(stored_analysis.document_type, "letter")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -8,6 +8,18 @@ from typing import Any, Dict, List, Optional
 
 from ..ai_service import AIAnalysisResult, BaseAIProvider
 from ..config import DEFAULT_OLLAMA_BASE_URL, OLLAMA_BASE_URL_ENV, OLLAMA_MODEL_ENV
+from ..document_intelligence import (
+    ACTION_SUMMARY_KEY,
+    CLASSIFIED_DOCUMENT_TYPE_KEY,
+    DEADLINE_RAW_TEXT_KEY,
+    DOCUMENT_DATE_KEY,
+    OBJECTION_RIGHT_KEY,
+    PAYMENT_REQUESTED_KEY,
+    REQUIRES_ACTION_KEY,
+    SENDER_CATEGORY_KEY,
+    SENDER_INSTITUTION_KEY,
+    SIGNAL_KEYS,
+)
 
 # Ollama's native /api/generate endpoint does not recognize a top-level
 # "max_tokens" field (that's the OpenAI-compatible endpoint's parameter
@@ -47,6 +59,13 @@ DEFAULT_TEMPERATURE = 0.2
 # a fluent paraphrase - a llama3.2:3b Turkish-fluency limitation that no
 # repeat_penalty/temperature combination tried here eliminated.
 DEFAULT_REPEAT_PENALTY = 1.3
+
+# 30s (the previous value) was observed in real testing to be too short for
+# an 8B model (qwen3:8b) generating against the expanded Document
+# Intelligence prompt on typical local hardware - the request was still
+# mid-response when the socket timed out. 120s comfortably covers that
+# while still failing fast on a genuinely unreachable/hung Ollama instance.
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 120
 
 
 def _load_json_safe(text: str) -> Optional[Dict[str, Any]]:
@@ -105,10 +124,14 @@ def _build_ollama_prompt(text: str, task: Optional[str] = None) -> str:
             f"Text:\n{text}\n"
         )
 
+    signal_keys_list = ", ".join(SIGNAL_KEYS)
     return (
         "You are an AI assistant analyzing a German official or corporate document. "
         "Return a valid JSON object with the following keys: document_type, language, summary, "
-        "turkish_explanation, important_dates, extracted_entities. "
+        f"turkish_explanation, important_dates, extracted_entities, {signal_keys_list}. "
+        "Use exactly these JSON key names, spelled exactly as given - a downstream deterministic "
+        "system reads them by exact name and silently falls back to a low-confidence default for "
+        "any key it does not find. "
         "important_dates must be a JSON array of strings. "
         "extracted_entities must be a JSON array of objects, each with a \"type\" and a \"value\" "
         "key. Extract every one of the following that is explicitly present in the text: policy "
@@ -138,6 +161,33 @@ def _build_ollama_prompt(text: str, task: Optional[str] = None) -> str:
         "insurance product is meant, default to \"zorunlu trafik sigortası\". Widerruf = "
         "cayma/geri çekme; Versicherungsbestätigung / eVB = sigorta teyidi / elektronik "
         "sigorta teyidi. "
+        f"{SENDER_CATEGORY_KEY} must be exactly one of these five words: Gericht, Behörde, "
+        "Inkasso, Unternehmen, Privat - based on who sent the document (a court; a public "
+        "authority such as Jobcenter, Finanzamt, or Ordnungsamt; a debt collection agency; a "
+        "private company; or a private individual). Use null if unclear. "
+        f"{SENDER_INSTITUTION_KEY} is the specific sender's name as written in the text (for "
+        "example \"Jobcenter Berlin Mitte\"), or null if it cannot be identified. "
+        f"{CLASSIFIED_DOCUMENT_TYPE_KEY} must be exactly one of: Mahnbescheid, Anhörung, "
+        "Änderungsbescheid, Steuerbescheid, Bescheid, Mahnung, Rechnung, Information - or null if "
+        "none clearly applies. Mahnbescheid is a formal, court-issued payment order (gerichtliches "
+        "Mahnverfahren); Mahnung is only an informal payment reminder with no court involved - "
+        "these are two different values, never use one when the text supports the other. Anhörung "
+        "is a hearing notice giving the reader a chance to respond before a decision is finalized. "
+        f"{DEADLINE_RAW_TEXT_KEY} is the exact phrase from the text stating a deadline or response "
+        "period (for example \"bis zum 15.09.2026\" or \"innerhalb von 14 Tagen\"), copied "
+        "verbatim - never invent, paraphrase, or compute one. Use null if no deadline is mentioned. "
+        f"{DOCUMENT_DATE_KEY} is the date printed on the document itself (near a label such as "
+        "\"Datum\" or \"Bescheid vom\"), formatted YYYY-MM-DD, only if that exact date is present "
+        "in the text - never guess, compute, or use today's date. Use null if no such date is "
+        "found. "
+        f"{REQUIRES_ACTION_KEY}, {PAYMENT_REQUESTED_KEY}, and {OBJECTION_RIGHT_KEY} must each be "
+        f"the JSON boolean true or false, never a string: {REQUIRES_ACTION_KEY} is true only if "
+        "the reader must do something (respond, pay, submit documents, appeal); "
+        f"{PAYMENT_REQUESTED_KEY} is true only if the text demands a payment; "
+        f"{OBJECTION_RIGHT_KEY} is true only if the text mentions a right to object or appeal "
+        "(Widerspruch, Einspruch, Rechtsbehelf). "
+        f"{ACTION_SUMMARY_KEY} is a short summary, at most about 20 words, IN TURKISH, of what the "
+        f"reader needs to do. Use null if {REQUIRES_ACTION_KEY} is false. "
         "Do not include any additional text or explanation. "
         f"Text:\n{text}\n"
     )
@@ -190,7 +240,9 @@ class OllamaProvider(BaseAIProvider):
         )
 
         try:
-            with urllib.request.urlopen(request, timeout=30) as response:
+            with urllib.request.urlopen(
+                request, timeout=DEFAULT_REQUEST_TIMEOUT_SECONDS
+            ) as response:
                 response_text = response.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
             return AIAnalysisResult(
@@ -200,6 +252,18 @@ class OllamaProvider(BaseAIProvider):
         except urllib.error.URLError as exc:
             return AIAnalysisResult(
                 error_message=f"Ollama connection error: {exc.reason}",
+                raw_response={"error": str(exc)},
+            )
+        except TimeoutError as exc:
+            # A timeout that occurs mid-response (e.g. inside
+            # response.read()/getresponse(), after the connection itself
+            # succeeded) surfaces as a bare TimeoutError here, not
+            # urllib.error.URLError - observed in real testing with
+            # qwen3:8b. Must be handled the same way as the network errors
+            # above: a clean AIAnalysisResult, never an exception that
+            # propagates out of the AI provider and crashes the caller.
+            return AIAnalysisResult(
+                error_message=f"Ollama request timed out: {exc}",
                 raw_response={"error": str(exc)},
             )
 
