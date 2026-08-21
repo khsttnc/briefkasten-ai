@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 
 from .database import Base
@@ -63,6 +63,23 @@ class Document(Base):
     text = Column(Text, nullable=True)
     character_count = Column(Integer, nullable=True)
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+
+    # Document Intelligence layer (all nullable: unset until the
+    # deterministic post-processing engines run on an analyzed document).
+    # LLM output is a signal only - these are the deterministic engines'
+    # final classification, distinct from the free-form
+    # DocumentAIAnalysis.document_type the LLM returns.
+    sender_category = Column(String, nullable=True)
+    sender_institution = Column(String, nullable=True)
+    document_type = Column(String, nullable=True)
+    priority_level = Column(String, nullable=True)  # critical/high/normal/low
+    priority_reasoning = Column(Text, nullable=True)
+    deadline_raw_text = Column(String, nullable=True)
+    deadline_type = Column(String, nullable=True)  # absolute/relative/none
+    deadline_estimated_date = Column(DateTime, nullable=True)
+    deadline_certainty = Column(String, nullable=True)  # exact/estimated/unknown_needs_review
+    requires_action = Column(Boolean, nullable=True)
+    action_summary = Column(Text, nullable=True)
 
     owner = relationship("User", back_populates="documents")
     analyses = relationship(
