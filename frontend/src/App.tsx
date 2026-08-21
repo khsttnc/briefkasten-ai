@@ -1,10 +1,15 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   uploadDocument,
   analyzeDocumentById,
   analyzeDocumentAIById,
+  fetchDocuments,
+  fetchDocumentsSummary,
   AIAnalysisResponse,
   AnalyzeResponse,
+  DocumentsSummaryCounts,
+  DocumentSummary,
+  PriorityLevel,
   UploadResponse,
 } from './api';
 import Hero from './components/landing/Hero';
@@ -20,6 +25,118 @@ const TOOL_SECTION_ID = 'analiz-araci';
 
 interface AppError {
   message: string;
+}
+
+const PRIORITY_ORDER: PriorityLevel[] = ['critical', 'high', 'normal', 'low'];
+
+const PRIORITY_LABELS: Record<PriorityLevel, string> = {
+  critical: 'Kritik',
+  high: 'Önemli',
+  normal: 'Normal',
+  low: 'Bilgi',
+};
+
+function MeineDokumente() {
+  const [summary, setSummary] = useState<DocumentsSummaryCounts | null>(null);
+  const [documents, setDocuments] = useState<DocumentSummary[]>([]);
+  const [activeFilter, setActiveFilter] = useState<PriorityLevel | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadDocuments = async (priority: PriorityLevel | null) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await fetchDocuments(priority ?? undefined);
+      setDocuments(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Belgeler yüklenemedi.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchDocumentsSummary()
+      .then(setSummary)
+      .catch((err) => setError(err instanceof Error ? err.message : 'Özet yüklenemedi.'));
+    loadDocuments(null);
+    // Runs once on mount; loadDocuments(null) covers the initial (unfiltered) load.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleFilterClick = (level: PriorityLevel) => {
+    const next = activeFilter === level ? null : level;
+    setActiveFilter(next);
+    loadDocuments(next);
+  };
+
+  return (
+    <section className="card" id="meine-dokumente">
+      <div className="card-header">
+        <h2>Meine Dokumente</h2>
+        <p>Önceliğe göre sıralanmış belgeleriniz.</p>
+      </div>
+
+      <div className="priority-counters">
+        {PRIORITY_ORDER.map((level) => (
+          <button
+            key={level}
+            type="button"
+            className={`priority-counter priority-counter--${level}${
+              activeFilter === level ? ' is-active' : ''
+            }`}
+            onClick={() => handleFilterClick(level)}
+          >
+            <span className="priority-counter-value">{summary ? summary[level] : '–'}</span>
+            <span className="priority-counter-label">{PRIORITY_LABELS[level]}</span>
+          </button>
+        ))}
+      </div>
+
+      {error && <div className="error-banner">{error}</div>}
+      {loading && <div className="status-banner">Belgeler yükleniyor...</div>}
+
+      {!loading && !error && documents.length === 0 && (
+        <div className="empty-state">
+          {activeFilter
+            ? 'Bu öncelikte belge bulunamadı.'
+            : 'Henüz analiz edilmiş belge bulunamadı.'}
+        </div>
+      )}
+
+      {!loading && documents.length > 0 && (
+        <ul className="document-list">
+          {documents.map((doc) => {
+            const priorityKey = doc.priority_level ?? 'unclassified';
+            return (
+              <li key={doc.id} className={`document-list-item priority-${priorityKey}`}>
+                <div className="document-list-item-header">
+                  <span className={`priority-badge priority-badge--${priorityKey}`}>
+                    {doc.priority_level ? PRIORITY_LABELS[doc.priority_level] : 'Analiz bekliyor'}
+                  </span>
+                  <span className="document-list-item-filename">{doc.filename}</span>
+                </div>
+                <div className="document-list-item-meta">
+                  {doc.sender_institution && <span>{doc.sender_institution}</span>}
+                  {doc.document_type && <span>{doc.document_type}</span>}
+                  {doc.deadline_estimated_date && (
+                    <span>
+                      Son tarih: {doc.deadline_estimated_date.slice(0, 10)}
+                      {doc.deadline_certainty === 'unknown_needs_review'
+                        ? ' (belirsiz, kontrol edin)'
+                        : ''}
+                    </span>
+                  )}
+                </div>
+                {doc.action_summary && <p className="document-list-item-action">{doc.action_summary}</p>}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+  );
 }
 
 function App() {
@@ -257,6 +374,8 @@ function AppHome() {
             <div className="empty-state">AI analizi için butona basın. AI kullanılabilir değilse burada açıklama görünecek.</div>
           )}
         </section>
+
+        <MeineDokumente />
       </main>
       </div>
 

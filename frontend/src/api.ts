@@ -25,6 +25,34 @@ export interface AIAnalysisResponse {
   error_message?: string;
 }
 
+export type PriorityLevel = 'critical' | 'high' | 'normal' | 'low';
+
+export interface DocumentSummary {
+  id: number;
+  filename: string;
+  uploaded_at: string | null;
+  status: string;
+  sender_category: string | null;
+  sender_institution: string | null;
+  document_type: string | null;
+  priority_level: PriorityLevel | null;
+  priority_reasoning: string | null;
+  deadline_type: string | null;
+  deadline_estimated_date: string | null;
+  deadline_certainty: string | null;
+  requires_action: boolean;
+  action_summary: string | null;
+}
+
+export interface DocumentsSummaryCounts {
+  critical: number;
+  high: number;
+  normal: number;
+  low: number;
+  unclassified: number;
+  total: number;
+}
+
 const apiBase = import.meta.env.VITE_API_BASE ?? '/api';
 
 async function parseJsonResponse(response: Response) {
@@ -56,5 +84,18 @@ export async function analyzeDocumentAIById(documentId: number): Promise<AIAnaly
   const response = await fetch(`${apiBase}/analyze/id/${documentId}/ai`, {
     method: 'POST',
   });
+  return parseJsonResponse(response);
+}
+
+export async function fetchDocumentsSummary(): Promise<DocumentsSummaryCounts> {
+  const response = await fetch(`${apiBase}/documents/summary`);
+  return parseJsonResponse(response);
+}
+
+export async function fetchDocuments(priority?: PriorityLevel): Promise<DocumentSummary[]> {
+  const url = priority
+    ? `${apiBase}/documents?priority=${encodeURIComponent(priority)}`
+    : `${apiBase}/documents`;
+  const response = await fetch(url);
   return parseJsonResponse(response);
 }

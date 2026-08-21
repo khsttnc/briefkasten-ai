@@ -1,7 +1,8 @@
 import logging
 import os
+from typing import Optional
 
-from fastapi import Depends, FastAPI, File, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
@@ -11,7 +12,14 @@ from .billing import process_stripe_webhook
 from .config import DEFAULT_FRONTEND_ORIGIN, FRONTEND_ORIGIN_ENV
 from .database import engine, get_db
 from .models import Base, User
-from .services import analyze_document, analyze_document_by_id, analyze_document_ai_by_id, save_document
+from .services import (
+    analyze_document,
+    analyze_document_by_id,
+    analyze_document_ai_by_id,
+    get_documents_summary,
+    list_documents,
+    save_document,
+)
 
 logger = logging.getLogger("briefkasten")
 
@@ -88,6 +96,23 @@ def analyze_document_ai_by_id_route(
     current_user: User = Depends(get_current_user),
 ):
     return analyze_document_ai_by_id(document_id, db, owner_id=current_user.id)
+
+
+@app.get("/documents")
+def list_documents_route(
+    priority: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return list_documents(db, owner_id=current_user.id, priority=priority)
+
+
+@app.get("/documents/summary")
+def documents_summary_route(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return get_documents_summary(db, owner_id=current_user.id)
 
 
 @app.get("/analyze/{filename}", deprecated=True)

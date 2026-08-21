@@ -4,6 +4,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import List, Optional
 from fastapi import UploadFile, HTTPException
 from sqlalchemy.orm import Session
 import fitz
@@ -18,6 +19,7 @@ from .ai_service import AIService
 from .document_intelligence import derive_intelligence_fields
 from .entity_validation import validate_extracted_entities
 from .models import Document, DocumentAIAnalysis
+from .priority_engine import LEVEL_ORDER
 from .providers.provider_factory import get_ai_provider
 from .document_processing import DocumentProcessingOrchestrator
 
@@ -386,3 +388,67 @@ def analyze_document_ai_by_id(document_id: int, db: Session, owner_id: int) -> d
         raise HTTPException(status_code=502, detail=analysis_result.error_message)
 
     return response
+
+
+def _serialize_document_summary(document: Document) -> dict:
+    return {
+        "id": document.id,
+        "filename": document.filename,
+        "uploaded_at": document.uploaded_at.isoformat() if document.uploaded_at else None,
+        "status": document.status,
+        "sender_category": document.sender_category,
+        "sender_institution": document.sender_institution,
+        "document_type": document.document_type,
+        "priority_level": document.priority_level,
+        "priority_reasoning": document.priority_reasoning,
+        "deadline_type": document.deadline_type,
+        "deadline_estimated_date": (
+            document.deadline_estimated_date.isoformat() if document.deadline_estimated_date else None
+        ),
+        "deadline_certainty": document.deadline_certainty,
+        "requires_action": document.requires_action,
+        "action_summary": document.action_summary,
+    }
+
+
+def list_documents(db: Session, owner_id: int, priority: Optional[str] = None) -> List[dict]:
+    if priority is not None and priority not in LEVEL_ORDER:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid priority '{priority}'. Must be one of: {', '.join(LEVEL_ORDER)}.",
+        )
+
+    query = db.query(Document).filter(Document.owner_id == owner_id)
+    if priority is not None:
+        query = query.filter(Document.priority_level == priority)
+    documents = query.all()
+
+    # Highest severity first; within the same level, the soonest/most
+    # certain deadline first, with no-known-deadline documents sorted last.
+    # Sorted in Python rather than a SQL ORDER BY: priority_level is a
+    # string column with no alphabetical severity order, and this keeps
+    # the ranking logic in the one place that already owns it
+    # (priority_engine.LEVEL_ORDER) instead of duplicating it as a SQL
+    # CASE expression.
+    def sort_key(doc: Document):
+        level_rank = LEVEL_ORDER.index(doc.priority_level) if doc.priority_level in LEVEL_ORDER else -1
+        deadline_date = doc.deadline_estimated_date or datetime.max
+        return (-level_rank, deadline_date)
+
+    documents.sort(key=sort_key)
+
+    return [_serialize_document_summary(doc) for doc in documents]
+
+
+def get_documents_summary(db: Session, owner_id: int) -> dict:
+    documents = db.query(Document.priority_level).filter(Document.owner_id == owner_id).all()
+
+    counts = {level: 0 for level in LEVEL_ORDER}
+    unclassified = 0
+    for (level,) in documents:
+        if level in counts:
+            counts[level] += 1
+        else:
+            unclassified += 1
+
+    return {**counts, "unclassified": unclassified, "total": len(documents)}

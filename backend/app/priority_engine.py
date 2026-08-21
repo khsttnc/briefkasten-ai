@@ -13,7 +13,11 @@ from typing import Optional
 
 PriorityLevel = str  # "critical" | "high" | "normal" | "low"
 
-_LEVEL_ORDER = ["low", "normal", "high", "critical"]
+# Public: severity order, lowest first. services.py (the /documents and
+# /documents/summary endpoints) imports this to rank documents and to
+# enumerate the valid ?priority= filter values, instead of duplicating the
+# level list or its ordering.
+LEVEL_ORDER = ["low", "normal", "high", "critical"]
 
 # document_type values that are always important regardless of the LLM's
 # own confidence/score: a hearing notice (Anhörung) has a statutory
@@ -81,7 +85,7 @@ def _level_from_score(score: int) -> PriorityLevel:
 
 
 def _max_level(a: PriorityLevel, b: PriorityLevel) -> PriorityLevel:
-    return a if _LEVEL_ORDER.index(a) >= _LEVEL_ORDER.index(b) else b
+    return a if LEVEL_ORDER.index(a) >= LEVEL_ORDER.index(b) else b
 
 
 def classify_priority(data: PriorityInput) -> PriorityResult:

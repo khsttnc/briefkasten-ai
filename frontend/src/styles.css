@@ -217,6 +217,144 @@ h1 {
   }
 }
 
+/* Meine Dokumente dashboard */
+
+.priority-counters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.priority-counter {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid transparent;
+  background: #f8fafc;
+  text-align: left;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.priority-counter:hover {
+  transform: translateY(-1px);
+}
+
+.priority-counter.is-active {
+  box-shadow: 0 0 0 2px currentColor inset;
+}
+
+.priority-counter-value {
+  font-size: 1.6rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.priority-counter-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.priority-counter--critical {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #b91c1c;
+}
+
+.priority-counter--high {
+  background: #fffbeb;
+  border-color: #fde68a;
+  color: #b45309;
+}
+
+.priority-counter--normal {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+}
+
+.priority-counter--low {
+  background: #f8fafc;
+  border-color: #e2e8f0;
+  color: #475569;
+}
+
+.document-list {
+  list-style: none;
+  margin: 18px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.document-list-item {
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+
+.document-list-item-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.document-list-item-filename {
+  font-weight: 600;
+}
+
+.document-list-item-meta {
+  margin-top: 6px;
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 0.88rem;
+  color: #6b7280;
+}
+
+.document-list-item-action {
+  margin: 8px 0 0;
+  font-size: 0.92rem;
+  color: #374151;
+}
+
+.priority-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.priority-badge--critical {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.priority-badge--high {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.priority-badge--normal {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.priority-badge--low,
+.priority-badge--unclassified {
+  background: #e2e8f0;
+  color: #475569;
+}
+
 /* Landing page sections */
 
 .landing-container {
