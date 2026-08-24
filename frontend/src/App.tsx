@@ -20,6 +20,7 @@ import CTA from './components/landing/CTA';
 import Footer from './components/landing/Footer';
 import Impressum from './components/legal/Impressum';
 import Datenschutz from './components/legal/Datenschutz';
+import AuthGate from './auth/AuthGate';
 
 const TOOL_SECTION_ID = 'analiz-araci';
 
@@ -258,6 +259,7 @@ function AppHome() {
         </div>
       </header>
 
+      <AuthGate>
       <main className="app-content">
         <section className="card">
           <div className="card-header">
@@ -377,6 +379,7 @@ function AppHome() {
 
         <MeineDokumente />
       </main>
+      </AuthGate>
       </div>
 
       <Footer />

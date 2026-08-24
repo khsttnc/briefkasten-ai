@@ -1,3 +1,5 @@
+import { supabase } from './supabaseClient';
+
 export interface UploadResponse {
   id: number;
   filename: string;
@@ -55,9 +57,19 @@ export interface DocumentsSummaryCounts {
 
 const apiBase = import.meta.env.VITE_API_BASE ?? '/api';
 
+async function authHeaders(): Promise<HeadersInit> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 async function parseJsonResponse(response: Response) {
   const data = await response.json().catch(() => ({ message: 'Sunucu geçerli JSON döndürmedi.' }));
   if (!response.ok) {
+    if (response.status === 401) {
+      supabase.auth.signOut();
+      throw new Error('Oturumunuz sona ermiş. Lütfen tekrar giriş yapın.');
+    }
     throw new Error(data.detail || data.error || data.message || 'Sunucu hatası oluştu.');
   }
   return data;
@@ -69,6 +81,7 @@ export async function uploadDocument(file: File): Promise<UploadResponse> {
 
   const response = await fetch(`${apiBase}/upload`, {
     method: 'POST',
+    headers: await authHeaders(),
     body,
   });
 
@@ -76,19 +89,24 @@ export async function uploadDocument(file: File): Promise<UploadResponse> {
 }
 
 export async function analyzeDocumentById(documentId: number): Promise<AnalyzeResponse> {
-  const response = await fetch(`${apiBase}/analyze/id/${documentId}`);
+  const response = await fetch(`${apiBase}/analyze/id/${documentId}`, {
+    headers: await authHeaders(),
+  });
   return parseJsonResponse(response);
 }
 
 export async function analyzeDocumentAIById(documentId: number): Promise<AIAnalysisResponse> {
   const response = await fetch(`${apiBase}/analyze/id/${documentId}/ai`, {
     method: 'POST',
+    headers: await authHeaders(),
   });
   return parseJsonResponse(response);
 }
 
 export async function fetchDocumentsSummary(): Promise<DocumentsSummaryCounts> {
-  const response = await fetch(`${apiBase}/documents/summary`);
+  const response = await fetch(`${apiBase}/documents/summary`, {
+    headers: await authHeaders(),
+  });
   return parseJsonResponse(response);
 }
 
@@ -96,6 +114,8 @@ export async function fetchDocuments(priority?: PriorityLevel): Promise<Document
   const url = priority
     ? `${apiBase}/documents?priority=${encodeURIComponent(priority)}`
     : `${apiBase}/documents`;
-  const response = await fetch(url);
+  const response = await fetch(url, {
+    headers: await authHeaders(),
+  });
   return parseJsonResponse(response);
 }
