@@ -43,6 +43,12 @@ OLLAMA_BASE_URL_ENV = "OLLAMA_BASE_URL"
 OLLAMA_MODEL_ENV = "OLLAMA_MODEL"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 
+NVIDIA_API_KEY_ENV = "NVIDIA_API_KEY"
+NVIDIA_MODEL_ENV = "NVIDIA_MODEL"
+NVIDIA_BASE_URL_ENV = "NVIDIA_BASE_URL"
+DEFAULT_NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
+DEFAULT_NVIDIA_MODEL = "nvidia/nemotron-3-nano-30b-a3b"
+
 # Supabase Auth issues user JWTs signed with this project-level secret
 # (Supabase Dashboard -> Settings -> API -> JWT Secret). No default: a
 # missing secret must fail loudly (auth.py returns 503), never silently
