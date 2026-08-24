@@ -13,6 +13,15 @@ COPY package.json package-lock.json ./
 RUN npm install
 
 COPY . .
+
+# Vite inlines VITE_-prefixed vars into the built JS at build time (it reads
+# them straight out of process.env, no .env file needed) - so they must
+# arrive as build args, not as container runtime env vars.
+ARG VITE_SUPABASE_URL
+ARG VITE_SUPABASE_ANON_KEY
+ENV VITE_SUPABASE_URL=$VITE_SUPABASE_URL
+ENV VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY
+
 RUN npm run build
 
 FROM nginx:1.27-alpine

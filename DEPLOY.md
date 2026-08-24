@@ -109,7 +109,9 @@ cd /opt/briefkasten-ai
 
 ```bash
 cp .env.production.example backend/.env
-nano backend/.env   # gerçek değerleri gir
+cp .env.production.example .env
+nano backend/.env   # gerçek backend değerlerini gir
+nano .env           # sadece VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY'i gir
 ```
 
 Doldurman gerekenler (bkz. dosyadaki açıklamalar):
@@ -118,13 +120,23 @@ Doldurman gerekenler (bkz. dosyadaki açıklamalar):
 - `SUPABASE_JWT_SECRET`
 - `STRIPE_WEBHOOK_SECRET` (webhook kullanılıyorsa)
 - `FRONTEND_ORIGIN` zaten `https://briefkastenai.de` olarak dolu, dokunma
+- `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` (Supabase Dashboard ->
+  Project Settings -> API)
 
 `DATABASE_URL` ve `UPLOAD_FOLDER` alanlarını **boş bırak** —
 `docker-compose.yml` bunları zaten kalıcı volume'a göre otomatik
 ayarlıyor, buradaki değer dikkate alınmaz.
 
-`backend/.env` asla commit'lenmemeli; repo'nun `.gitignore`'ında zaten
-hariç tutuluyor.
+İki ayrı dosyaya ihtiyaç var çünkü ikisinin okunma yolu farklı:
+`backend/.env` container'a `env_file` ile çalışma zamanında enjekte
+edilir, ama `VITE_SUPABASE_URL`/`VITE_SUPABASE_ANON_KEY` Vite tarafından
+**build zamanında** koda gömülür - bu yüzden repo kökündeki `.env`
+dosyasından `docker-compose.yml`'in `frontend.build.args` alanına
+(`${VITE_SUPABASE_URL}` şeklinde) akmaları gerekiyor. `backend/.env`'e
+yazmak yeterli değil, frontend build'i o dosyayı hiç görmüyor.
+
+Ne `backend/.env` ne de kök `.env` asla commit'lenmeli; repo'nun
+`.gitignore`'ında zaten hariç tutuluyorlar.
 
 ## 7. Build ve ayağa kaldır
 
