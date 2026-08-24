@@ -65,6 +65,14 @@ def home():
     }
 
 
+@app.get("/health")
+def health():
+    # Unauthenticated and touches no DB/external service on purpose - this
+    # is a liveness probe for the container/reverse proxy, not a readiness
+    # check for the AI provider or database.
+    return {"status": "ok"}
+
+
 @app.post("/upload")
 async def upload_document(
     file: UploadFile = File(...),

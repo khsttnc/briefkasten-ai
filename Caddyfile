@@ -1,0 +1,13 @@
+briefkastenai.de {
+	# Strip the /api prefix before forwarding, matching what the Vite dev
+	# proxy does locally (see frontend/vite.config.ts) - the FastAPI routes
+	# themselves have no /api prefix (see backend/app/main.py).
+	handle /api/* {
+		uri strip_prefix /api
+		reverse_proxy backend:8000
+	}
+
+	handle {
+		reverse_proxy frontend:80
+	}
+}
