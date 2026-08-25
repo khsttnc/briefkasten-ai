@@ -415,12 +415,6 @@ function AppHome() {
                 </div>
               )}
               {aiResult.error_message && <div className="error-banner">AI Hatası: {aiResult.error_message}</div>}
-              {aiResult.summary && (
-                <div className="text-block">
-                  <h3>Özet</h3>
-                  <p>{aiResult.summary}</p>
-                </div>
-              )}
               {aiResult.turkish_explanation && (
                 <div className="text-block">
                   <h3>Açıklama</h3>
