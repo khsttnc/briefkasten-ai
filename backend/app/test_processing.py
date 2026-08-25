@@ -2,7 +2,13 @@ import json
 import unittest
 from unittest.mock import patch, MagicMock
 
-from .document_processing import DocumentProcessingOrchestrator
+from .document_processing import (
+    MAX_ANALYSIS_TEXT_CHARS,
+    TRUNCATION_HEAD_CHARS,
+    TRUNCATION_TAIL_CHARS,
+    DocumentProcessingOrchestrator,
+    is_text_truncated_for_analysis,
+)
 from .providers.ollama_provider import OllamaProvider
 from .providers.claude_provider import ClaudeProvider
 from .ai_service import AIAnalysisResult
@@ -58,6 +64,71 @@ class TestDocumentProcessingOrchestrator(unittest.TestCase):
         result = orchestrator.run('Test text')
         self.assertEqual(result.error_message, 'fail')
         self.assertEqual(provider.calls, 1)
+
+
+class SpyProvider(DummyProvider):
+    """Records the exact text it was called with, so truncation behavior
+    can be asserted on what actually reaches the provider."""
+
+    def __init__(self):
+        super().__init__()
+        self.received_text = None
+
+    def analyze_document(self, text: str) -> AIAnalysisResult:
+        self.received_text = text
+        return super().analyze_document(text)
+
+
+class TextTruncationTestCase(unittest.TestCase):
+    """Regression test for: a 206,540-character ADAC insurance policy PDF
+    was sent to the AI provider in full - expensive and unnecessary, since
+    this pipeline's personalized signal (sender, dates, an actionable
+    deadline) is almost never buried in hundreds of pages of boilerplate
+    terms."""
+
+    def test_short_text_is_sent_unmodified(self):
+        provider = SpyProvider()
+        text = "short text"
+        DocumentProcessingOrchestrator(provider).run(text)
+        self.assertEqual(provider.received_text, text)
+
+    def test_text_exactly_at_limit_is_sent_unmodified(self):
+        provider = SpyProvider()
+        text = "X" * MAX_ANALYSIS_TEXT_CHARS
+        DocumentProcessingOrchestrator(provider).run(text)
+        self.assertEqual(provider.received_text, text)
+
+    def test_long_text_is_truncated_to_head_and_tail_with_marker(self):
+        head = "A" * TRUNCATION_HEAD_CHARS
+        middle = "C" * 5000
+        tail = "B" * TRUNCATION_TAIL_CHARS
+        text = head + middle + tail
+
+        provider = SpyProvider()
+        DocumentProcessingOrchestrator(provider).run(text)
+
+        received = provider.received_text
+        self.assertLess(len(received), len(text))
+        self.assertTrue(received.startswith(head))
+        self.assertTrue(received.endswith(tail))
+        self.assertIn("SYSTEM NOTE", received)
+        self.assertIn(str(len(middle)), received)
+        # The omitted middle must actually be gone, not just summarized.
+        self.assertNotIn("C" * 100, received)
+
+
+class IsTextTruncatedForAnalysisTestCase(unittest.TestCase):
+    def test_none_character_count_is_not_truncated(self):
+        self.assertFalse(is_text_truncated_for_analysis(None))
+
+    def test_under_limit_is_not_truncated(self):
+        self.assertFalse(is_text_truncated_for_analysis(100))
+
+    def test_exactly_at_limit_is_not_truncated(self):
+        self.assertFalse(is_text_truncated_for_analysis(MAX_ANALYSIS_TEXT_CHARS))
+
+    def test_over_limit_is_truncated(self):
+        self.assertTrue(is_text_truncated_for_analysis(MAX_ANALYSIS_TEXT_CHARS + 1))
 
 
 class TestProviderSelection(unittest.TestCase):

@@ -13,6 +13,7 @@ from sqlalchemy.orm import sessionmaker
 
 from . import services
 from .ai_service import AIAnalysisResult
+from .document_intelligence import _MULTIPLE_DEADLINES_ACTION_SUMMARY_BY_LANGUAGE
 from .models import Base, Document, DocumentAIAnalysis, User
 
 
@@ -199,6 +200,66 @@ class DuplicateAIAnalysisPreventionTestCase(unittest.TestCase):
             .all()
         )
         self.assertEqual(len(stored), 1)
+
+    def test_force_true_bypasses_cache_and_calls_provider_again(self):
+        # Regression test for: after a taxonomy/prompt fix, a previously
+        # analyzed document's stale result (e.g. a Kündigung misclassified
+        # as Mahnung under the old taxonomy) had no way to be refreshed
+        # without re-uploading. force=True must call the provider again and
+        # persist a new DocumentAIAnalysis row rather than reusing the old one.
+        document = self._upload_and_extract()
+        dummy_provider = DummyAIProvider()
+
+        with patch.object(services, "get_ai_provider", return_value=dummy_provider):
+            services.analyze_document_ai_by_id(document.id, self.db, owner_id=self.owner_id)
+            services.analyze_document_ai_by_id(
+                document.id, self.db, owner_id=self.owner_id, force=True
+            )
+
+        self.assertEqual(dummy_provider.calls, 2)
+
+        stored = (
+            self.db.query(DocumentAIAnalysis)
+            .filter(DocumentAIAnalysis.document_id == document.id)
+            .all()
+        )
+        self.assertEqual(len(stored), 2)
+
+    def test_truncated_document_gets_capped_deadline_certainty(self):
+        # Wiring test: analyze_document_ai_by_id must derive text_truncated
+        # from the already-stored character_count and pass it through to
+        # derive_intelligence_fields, rather than a real 200-page PDF -
+        # document_processing.py's own truncation logic is unit-tested
+        # separately in test_processing.py.
+        document = self._upload_and_extract()
+        document.character_count = 500_000
+        self.db.add(document)
+        self.db.commit()
+
+        class ExactDeadlineProvider(DummyAIProvider):
+            def analyze_document(self, text: str) -> AIAnalysisResult:
+                self.calls += 1
+                return AIAnalysisResult(
+                    document_type="letter",
+                    language="de",
+                    summary="Test summary",
+                    turkish_explanation="Test aciklama",
+                    raw_response={
+                        "document_type": "letter",
+                        "deadline_raw_text": "bis zum 15.09.2026",
+                    },
+                )
+
+        with patch.object(services, "get_ai_provider", return_value=ExactDeadlineProvider()):
+            result = services.analyze_document_ai_by_id(document.id, self.db, owner_id=self.owner_id)
+
+        self.assertEqual(result["status"], "completed")
+        refreshed = self.db.query(Document).filter(Document.id == document.id).first()
+        self.assertEqual(refreshed.deadline_type, "absolute")
+        self.assertEqual(refreshed.deadline_certainty, "estimated")
+        self.assertIn("çok uzun", refreshed.action_summary)
+        self.assertTrue(result["text_truncated"])
+        self.assertEqual(result["original_character_count"], 500_000)
 
     def test_cached_result_preserves_all_fields(self):
         document = self._upload_and_extract()
@@ -671,7 +732,13 @@ class MultipleDeadlinesPipelineTestCase(unittest.TestCase):
         self.assertEqual(refreshed.deadline_type, "relative")
         self.assertEqual(refreshed.deadline_certainty, "unknown_needs_review")
         self.assertIsNone(refreshed.deadline_estimated_date)
-        self.assertIn("birden fazla sure", refreshed.action_summary)
+        # action_summary is deterministically overridden when
+        # multiple_deadlines_detected is true, regardless of what the
+        # (mocked) LLM wrote for it above - see document_intelligence.py.
+        self.assertEqual(
+            refreshed.action_summary,
+            _MULTIPLE_DEADLINES_ACTION_SUMMARY_BY_LANGUAGE["Turkish"],
+        )
         # Behörde(2) + Änderungsbescheid(2) + objection(1) + relative(1)
         # + unresolved-deadline bump(1) = 7 -> critical
         self.assertEqual(refreshed.priority_level, "critical")

@@ -21,7 +21,7 @@ from .entity_validation import validate_extracted_entities
 from .models import Document, DocumentAIAnalysis
 from .priority_engine import LEVEL_ORDER
 from .providers.provider_factory import get_ai_provider
-from .document_processing import DocumentProcessingOrchestrator
+from .document_processing import DocumentProcessingOrchestrator, is_text_truncated_for_analysis
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
@@ -272,6 +272,12 @@ def _serialize_document_intelligence(document: Document) -> dict:
         "requires_action": document.requires_action,
         "action_summary": document.action_summary,
         "effective_date": document.effective_date.isoformat() if document.effective_date else None,
+        "text_truncated": is_text_truncated_for_analysis(document.character_count),
+        "original_character_count": (
+            document.character_count
+            if is_text_truncated_for_analysis(document.character_count)
+            else None
+        ),
     }
 
 
@@ -293,7 +299,9 @@ def _serialize_completed_analysis(analysis: DocumentAIAnalysis, document: Docume
     }
 
 
-def analyze_document_ai_by_id(document_id: int, db: Session, owner_id: int) -> dict:
+def analyze_document_ai_by_id(
+    document_id: int, db: Session, owner_id: int, force: bool = False
+) -> dict:
     document = (
         db.query(Document)
         .filter(Document.id == document_id, Document.owner_id == owner_id)
@@ -306,10 +314,19 @@ def analyze_document_ai_by_id(document_id: int, db: Session, owner_id: int) -> d
         raise HTTPException(status_code=404, detail="Document not found")
 
     # Reuse a previously completed analysis instead of re-calling the AI
-    # provider. Failed analyses are excluded so they remain retryable.
-    # Safe without its own owner_id filter: `document` above is already
-    # scoped to the requesting owner, so anything keyed off document.id
-    # inherits that scope.
+    # provider, unless force=True (user-triggered re-analyze - e.g. after a
+    # taxonomy/prompt change, or to retry a stale result). Failed analyses
+    # are always excluded from reuse so they remain retryable regardless of
+    # force. Safe without its own owner_id filter: `document` above is
+    # already scoped to the requesting owner, so anything keyed off
+    # document.id inherits that scope.
+    #
+    # force=True does not skip anything below this point - it still calls
+    # the real AI provider and inserts a new DocumentAIAnalysis row exactly
+    # like a first-time analysis. There is no usage-limit system yet, but
+    # when one exists, gating/counting it at the provider-call point below
+    # will already cover force-reanalyze for free, since this path is
+    # identical to a normal analysis from here on.
     existing_analysis = (
         db.query(DocumentAIAnalysis)
         .filter(
@@ -319,7 +336,7 @@ def analyze_document_ai_by_id(document_id: int, db: Session, owner_id: int) -> d
         .order_by(DocumentAIAnalysis.id.desc())
         .first()
     )
-    if existing_analysis is not None:
+    if existing_analysis is not None and not force:
         return _serialize_completed_analysis(existing_analysis, document)
 
     if not document.text or not document.text.strip():
@@ -387,7 +404,8 @@ def analyze_document_ai_by_id(document_id: int, db: Session, owner_id: int) -> d
     # failed LLM analysis, and a DB error here is swallowed too, so the AI
     # analysis result computed above is still returned/raised normally.
     try:
-        intelligence_fields = derive_intelligence_fields(raw_response)
+        text_truncated = is_text_truncated_for_analysis(document.character_count)
+        intelligence_fields = derive_intelligence_fields(raw_response, text_truncated=text_truncated)
         for field_name, field_value in intelligence_fields.items():
             setattr(document, field_name, field_value)
         db.add(document)
@@ -436,6 +454,12 @@ def _serialize_document_summary(document: Document) -> dict:
         "requires_action": document.requires_action,
         "action_summary": document.action_summary,
         "effective_date": document.effective_date.isoformat() if document.effective_date else None,
+        "text_truncated": is_text_truncated_for_analysis(document.character_count),
+        "original_character_count": (
+            document.character_count
+            if is_text_truncated_for_analysis(document.character_count)
+            else None
+        ),
     }
 
 

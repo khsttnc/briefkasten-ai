@@ -148,6 +148,89 @@ class MultipleDeadlinesSignalTestCase(unittest.TestCase):
         )
         self.assertEqual(fields["deadline_certainty"], "exact")
 
+    def test_action_summary_is_overridden_with_deterministic_turkish_text(self):
+        # Regression test for: nemotron produced literal German text here
+        # ("Mehrere Fristen gefunden; ...") despite the prompt instructing
+        # Turkish - action_summary must never depend on LLM language
+        # compliance for this fixed-meaning message.
+        fields = derive_intelligence_fields(
+            {
+                "deadline_raw_text": "bis zum 15.09.2026",
+                "multiple_deadlines_detected": True,
+                "action_summary": "Mehrere Fristen gefunden; prüfen Sie bitte sorgfältig.",
+            }
+        )
+        self.assertNotIn("Mehrere", fields["action_summary"])
+        self.assertIn("dikkatlice kontrol edin", fields["action_summary"])
+
+    def test_action_summary_untouched_when_only_one_deadline(self):
+        fields = derive_intelligence_fields(
+            {
+                "deadline_raw_text": "bis zum 15.09.2026",
+                "multiple_deadlines_detected": False,
+                "action_summary": "Widerspruch bis zum Datum einlegen.",
+            }
+        )
+        self.assertEqual(fields["action_summary"], "Widerspruch bis zum Datum einlegen.")
+
+
+class TextTruncatedTestCase(unittest.TestCase):
+    """Regression test for: a document truncated for length (see
+    document_processing.MAX_ANALYSIS_TEXT_CHARS) could have a deadline
+    sitting in the omitted middle that the LLM never saw - deadline_certainty
+    must never claim "exact" in that case, and action_summary must say so,
+    fail-closed just like an unparseable deadline phrase."""
+
+    def test_exact_certainty_is_capped_to_estimated_when_truncated(self):
+        fields = derive_intelligence_fields(
+            {"deadline_raw_text": "bis zum 15.09.2026"}, text_truncated=True
+        )
+        self.assertEqual(fields["deadline_type"], "absolute")
+        self.assertEqual(fields["deadline_certainty"], "estimated")
+        # The computed date itself is still useful information, kept as-is.
+        self.assertEqual(fields["deadline_estimated_date"], date(2026, 9, 15))
+
+    def test_exact_certainty_untouched_when_not_truncated(self):
+        fields = derive_intelligence_fields(
+            {"deadline_raw_text": "bis zum 15.09.2026"}, text_truncated=False
+        )
+        self.assertEqual(fields["deadline_certainty"], "exact")
+
+    def test_unknown_needs_review_is_not_upgraded_by_truncation(self):
+        fields = derive_intelligence_fields(
+            {"deadline_raw_text": "innerhalb von 14 Tagen"},  # no document_date
+            text_truncated=True,
+        )
+        self.assertEqual(fields["deadline_certainty"], "unknown_needs_review")
+
+    def test_action_summary_gets_truncation_note_appended(self):
+        fields = derive_intelligence_fields(
+            {"action_summary": "Widerspruch einlegen."}, text_truncated=True
+        )
+        self.assertIn("Widerspruch einlegen.", fields["action_summary"])
+        self.assertIn("çok uzun", fields["action_summary"])
+
+    def test_action_summary_gets_truncation_note_even_when_none(self):
+        fields = derive_intelligence_fields({}, text_truncated=True)
+        self.assertIsNotNone(fields["action_summary"])
+        self.assertIn("çok uzun", fields["action_summary"])
+
+    def test_no_note_when_not_truncated(self):
+        fields = derive_intelligence_fields({"action_summary": "Widerspruch einlegen."})
+        self.assertEqual(fields["action_summary"], "Widerspruch einlegen.")
+
+    def test_truncation_note_appended_after_multiple_deadlines_override(self):
+        fields = derive_intelligence_fields(
+            {
+                "deadline_raw_text": "bis zum 15.09.2026",
+                "multiple_deadlines_detected": True,
+                "action_summary": "irrelevant, will be overridden",
+            },
+            text_truncated=True,
+        )
+        self.assertIn("dikkatlice kontrol edin", fields["action_summary"])
+        self.assertIn("çok uzun", fields["action_summary"])
+
 
 class EngineFailureIsolationTestCase(unittest.TestCase):
     """Even if a downstream engine misbehaves unexpectedly, this module must

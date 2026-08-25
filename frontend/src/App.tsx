@@ -121,6 +121,7 @@ function MeineDokumente() {
                 <div className="document-list-item-meta">
                   {doc.sender_institution && <span>{doc.sender_institution}</span>}
                   {doc.document_type && <span>{doc.document_type}</span>}
+                  {doc.text_truncated && <span title="Belge çok uzun olduğu için kısmen analiz edildi">Kısmi analiz</span>}
                   {doc.deadline_estimated_date && (
                     <span>
                       Son tarih: {doc.deadline_estimated_date.slice(0, 10)}
@@ -176,6 +177,14 @@ function AppHome() {
   const [error, setError] = useState<AppError | null>(null);
   const [loading, setLoading] = useState(false);
   const [aiLoading, setAILoading] = useState(false);
+  // Separate from statusMessage/error above: those are only rendered next
+  // to the upload card, far above the AI Analiz Paneli section - sharing
+  // them meant an AI-analyze error/status was invisible whenever the user
+  // had scrolled down to the AI panel (the classic "first click did
+  // nothing" report: it didn't fail silently, it failed visibly but out of
+  // view, so the user re-clicked and the retry happened to succeed).
+  const [aiStatusMessage, setAIStatusMessage] = useState<string>('');
+  const [aiError, setAIError] = useState<AppError | null>(null);
   // Bumped after a successful AI analysis to force MeineDokumente to
   // remount and re-fetch - otherwise a document analyzed in the current
   // session never shows its priority/deadline there until the page reloads.
@@ -192,6 +201,8 @@ function AppHome() {
     setStatusMessage('');
     setAnalysisResult(null);
     setAIResult(null);
+    setAIError(null);
+    setAIStatusMessage('');
   };
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -211,6 +222,8 @@ function AppHome() {
     setUploadResult(null);
     setAnalysisResult(null);
     setAIResult(null);
+    setAIError(null);
+    setAIStatusMessage('');
 
     try {
       const response = await uploadDocument(file);
@@ -227,24 +240,36 @@ function AppHome() {
     }
   };
 
-  const handleAIAnalyze = async () => {
-    if (!documentId) {
-      setError({ message: 'Önce bir belge yükleyip analiz edin.' });
+  const handleAIAnalyze = async (force = false) => {
+    if (aiLoading) {
+      // Button is disabled while aiLoading, but that disabling only takes
+      // effect after React re-renders - guard here too so a fast double
+      // click (or a stray duplicate event) can never fire a second
+      // in-flight request.
       return;
     }
 
-    setError(null);
-    setStatusMessage('AI analizi başlatılıyor...');
+    if (!documentId) {
+      setAIError({ message: 'Önce bir belge yükleyip analiz edin.' });
+      return;
+    }
+
+    setAIError(null);
+    setAIStatusMessage(
+      force
+        ? 'Belge yeniden analiz ediliyor, bu biraz zaman alabilir...'
+        : 'AI analizi başlatılıyor, bu biraz zaman alabilir...'
+    );
     setAILoading(true);
 
     try {
-      const response = await analyzeDocumentAIById(documentId);
+      const response = await analyzeDocumentAIById(documentId, { force });
       setAIResult(response);
-      setStatusMessage('AI analizi tamamlandı. Sonuçlar aşağıda gösteriliyor.');
+      setAIStatusMessage('AI analizi tamamlandı. Sonuçlar aşağıda gösteriliyor.');
       setDocumentsRefreshKey((key) => key + 1);
     } catch (err) {
-      setError({ message: err instanceof Error ? err.message : 'AI analizi sırasında bir hata oluştu.' });
-      setStatusMessage('');
+      setAIError({ message: err instanceof Error ? err.message : 'AI analizi sırasında bir hata oluştu.' });
+      setAIStatusMessage('');
     } finally {
       setAILoading(false);
     }
@@ -340,11 +365,28 @@ function AppHome() {
           </div>
 
           <div className="form-row">
-            <button onClick={handleAIAnalyze} disabled={!documentId || aiLoading} className="secondary-button">
+            <button
+              onClick={() => handleAIAnalyze()}
+              disabled={!documentId || aiLoading}
+              className="secondary-button"
+            >
               {aiLoading ? 'AI analizi çalışıyor...' : 'AI ile analiz et'}
             </button>
+            {aiResult && (
+              <button
+                onClick={() => handleAIAnalyze(true)}
+                disabled={aiLoading}
+                className="secondary-button"
+                title="Taksonomi veya AI modeli güncellendiyse eski sonucu atıp belgeyi baştan analiz eder."
+              >
+                {aiLoading ? 'Yeniden analiz ediliyor...' : 'Yeniden analiz et'}
+              </button>
+            )}
             {!documentId && <p className="muted-text">Önce bir belge yükleyip analiz edin.</p>}
           </div>
+
+          {aiStatusMessage && <div className="status-banner">{aiStatusMessage}</div>}
+          {aiError && <div className="error-banner">{aiError.message}</div>}
 
           {aiResult && (
             <div className="ai-results">
@@ -352,6 +394,15 @@ function AppHome() {
                 <p className="small-label">AI Durumu</p>
                 <p>{aiResult.status}</p>
               </div>
+              {aiResult.text_truncated && (
+                <div className="status-banner">
+                  Bu belge çok uzun olduğu için sadece bir kısmı analiz edildi
+                  {aiResult.original_character_count
+                    ? ` (${aiResult.original_character_count.toLocaleString('tr-TR')} karakterden bir kısmı kullanıldı)`
+                    : ''}
+                  . Atlanan bölümde başka bir süre/tarih olabilir, belgeyi elle de kontrol edin.
+                </div>
+              )}
               {aiResult.error_message && <div className="error-banner">AI Hatası: {aiResult.error_message}</div>}
               {aiResult.summary && (
                 <div className="text-block">
@@ -422,8 +473,8 @@ function AppHome() {
             </div>
           )}
 
-          {!aiResult && !aiLoading && documentId && (
-            <div className="empty-state">AI analizi için butona basın. AI kullanılabilir değilse burada açıklama görünecek.</div>
+          {!aiResult && !aiLoading && !aiError && documentId && (
+            <div className="empty-state">AI analizi için butona basın.</div>
           )}
         </section>
 

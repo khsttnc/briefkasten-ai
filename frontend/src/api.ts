@@ -43,6 +43,12 @@ export interface AIAnalysisResponse {
   // Informational only (e.g. a Kündigung's employment end date) - never
   // an action deadline. Kept separate from deadline_estimated_date.
   effective_date?: string | null;
+  // True when the document's text was too long to send to the AI provider
+  // in full (see backend document_processing.MAX_ANALYSIS_TEXT_CHARS) and
+  // was cut to a head+tail excerpt instead - deadline_certainty is never
+  // "exact" in that case, only "estimated" or "unknown_needs_review".
+  text_truncated?: boolean;
+  original_character_count?: number | null;
 }
 
 export type PriorityLevel = 'critical' | 'high' | 'normal' | 'low';
@@ -63,6 +69,8 @@ export interface DocumentSummary {
   requires_action: boolean;
   action_summary: string | null;
   effective_date: string | null;
+  text_truncated: boolean;
+  original_character_count: number | null;
 }
 
 export interface DocumentsSummaryCounts {
@@ -114,8 +122,14 @@ export async function analyzeDocumentById(documentId: number): Promise<AnalyzeRe
   return parseJsonResponse(response);
 }
 
-export async function analyzeDocumentAIById(documentId: number): Promise<AIAnalysisResponse> {
-  const response = await fetch(`${apiBase}/analyze/id/${documentId}/ai`, {
+export async function analyzeDocumentAIById(
+  documentId: number,
+  options?: { force?: boolean }
+): Promise<AIAnalysisResponse> {
+  const url = options?.force
+    ? `${apiBase}/analyze/id/${documentId}/ai?force=true`
+    : `${apiBase}/analyze/id/${documentId}/ai`;
+  const response = await fetch(url, {
     method: 'POST',
     headers: await authHeaders(),
   });

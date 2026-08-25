@@ -11,6 +11,7 @@ it must never raise into the analyze pipeline that calls it.
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 from typing import Any, Dict, Optional
 
@@ -81,6 +82,51 @@ SIGNAL_KEYS = (
 # preference yet; see TODO.md.
 OUTPUT_LANGUAGE_NAME = "Turkish"
 
+# Canned, non-LLM-authored action_summary for when multiple_deadlines_detected
+# is true - overrides whatever the LLM wrote in that case. Asking the LLM to
+# author this fixed-meaning sentence "in {OUTPUT_LANGUAGE_NAME}" was
+# unreliable in real production use (nemotron produced literal, identical
+# German text here despite the instruction), and the message never varies
+# per document anyway - a deterministic string removes the LLM-compliance
+# risk entirely instead of hoping it listens next time. Keyed by
+# OUTPUT_LANGUAGE_NAME so it moves in lockstep with the rest of the output-
+# language configuration; falls back to the Turkish text for a language not
+# yet in this dict (only Turkish is supported today, see TODO.md).
+_MULTIPLE_DEADLINES_ACTION_SUMMARY_BY_LANGUAGE = {
+    "Turkish": (
+        "Belgede birden fazla süre/tarih tespit edildi; lütfen tüm tarihleri "
+        "dikkatlice kontrol edin."
+    ),
+}
+
+
+def _multiple_deadlines_action_summary() -> str:
+    return _MULTIPLE_DEADLINES_ACTION_SUMMARY_BY_LANGUAGE.get(
+        OUTPUT_LANGUAGE_NAME,
+        _MULTIPLE_DEADLINES_ACTION_SUMMARY_BY_LANGUAGE["Turkish"],
+    )
+
+
+# Appended (not a replacement, unlike the multiple-deadlines override above)
+# to action_summary whenever the source text was too long to send to the AI
+# provider in full (see document_processing.MAX_ANALYSIS_TEXT_CHARS) - the
+# omitted middle could contain a deadline the LLM never even saw, so the
+# reader is told to check manually regardless of what was extracted.
+_TRUNCATION_ACTION_SUMMARY_NOTE_BY_LANGUAGE = {
+    "Turkish": (
+        "Not: Bu belge çok uzun olduğu için sadece bir kısmı analiz edildi; "
+        "atlanan bölümde başka bir süre/tarih olabilir, lütfen belgeyi elle "
+        "de kontrol edin."
+    ),
+}
+
+
+def _truncation_action_summary_note() -> str:
+    return _TRUNCATION_ACTION_SUMMARY_NOTE_BY_LANGUAGE.get(
+        OUTPUT_LANGUAGE_NAME,
+        _TRUNCATION_ACTION_SUMMARY_NOTE_BY_LANGUAGE["Turkish"],
+    )
+
 
 def _safe_str(value: Any) -> Optional[str]:
     if isinstance(value, str) and value.strip():
@@ -121,7 +167,9 @@ def _safe_defaults() -> Dict[str, Any]:
     }
 
 
-def derive_intelligence_fields(raw_response: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def derive_intelligence_fields(
+    raw_response: Optional[Dict[str, Any]], *, text_truncated: bool = False
+) -> Dict[str, Any]:
     """Returns a dict of Document column values, ready to assign via setattr.
 
     Always returns a complete, safe result: a missing AI analysis
@@ -129,6 +177,14 @@ def derive_intelligence_fields(raw_response: Optional[Dict[str, Any]]) -> Dict[s
     type, degrade to deadline_type='none'/'exact' and an unfloored 'low'
     priority_level - never an exception, so a failed or incomplete LLM
     analysis can never take the analyze pipeline down with it.
+
+    text_truncated: True when the source text exceeded
+    document_processing.MAX_ANALYSIS_TEXT_CHARS and was cut before being
+    sent to the AI provider (see document_processing._truncate_for_analysis).
+    A deadline could be sitting in the omitted middle that the LLM never
+    saw - same fail-closed spirit as an unparseable deadline phrase, this
+    caps deadline_certainty at "estimated" (never "exact") and appends a
+    review note to action_summary, regardless of what the LLM returned.
     """
     try:
         payload = raw_response if isinstance(raw_response, dict) else {}
@@ -144,12 +200,22 @@ def derive_intelligence_fields(raw_response: Optional[Dict[str, Any]]) -> Dict[s
         objection_right_mentioned = _safe_bool(payload.get(OBJECTION_RIGHT_KEY))
         action_summary = _safe_str(payload.get(ACTION_SUMMARY_KEY))
         multiple_deadlines_detected = _safe_bool(payload.get(MULTIPLE_DEADLINES_DETECTED_KEY))
+        if multiple_deadlines_detected:
+            # Deterministic override, not the LLM's own action_summary - see
+            # _multiple_deadlines_action_summary()'s docstring for why.
+            action_summary = _multiple_deadlines_action_summary()
 
         deadline = resolve_deadline(
             deadline_raw_text,
             document_date,
             multiple_deadlines_detected=multiple_deadlines_detected,
         )
+        if text_truncated and deadline.deadline_certainty == "exact":
+            deadline = replace(deadline, deadline_certainty="estimated")
+        if text_truncated:
+            note = _truncation_action_summary_note()
+            action_summary = f"{action_summary} {note}" if action_summary else note
+
         priority = classify_priority(
             PriorityInput(
                 sender_category=sender_category,

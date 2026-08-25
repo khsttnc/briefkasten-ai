@@ -99,10 +99,11 @@ def analyze_document_by_id_route(
 @app.post("/analyze/id/{document_id}/ai")
 def analyze_document_ai_by_id_route(
     document_id: int,
+    force: bool = False,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return analyze_document_ai_by_id(document_id, db, owner_id=current_user.id)
+    return analyze_document_ai_by_id(document_id, db, owner_id=current_user.id, force=force)
 
 
 @app.get("/documents")
