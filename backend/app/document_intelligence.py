@@ -61,6 +61,17 @@ SIGNAL_KEYS = (
     MULTIPLE_DEADLINES_DETECTED_KEY,
 )
 
+# The single language every LLM-generated free-text field (summary,
+# turkish_explanation, action_summary) must be written in, regardless of
+# the source document's own language. Centralized here instead of
+# hardcoded per provider prompt string (see providers/ollama_provider.py
+# and providers/claude_provider.py, which both import this) so that real
+# multi-language support later - letting a user pick Arabic/Russian/
+# English/etc - is a matter of parameterizing this one value instead of
+# hunting down every prompt across providers. Not wired to a user
+# preference yet; see TODO.md.
+OUTPUT_LANGUAGE_NAME = "Turkish"
+
 
 def _safe_str(value: Any) -> Optional[str]:
     if isinstance(value, str) and value.strip():

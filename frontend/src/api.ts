@@ -25,6 +25,21 @@ export interface AIAnalysisResponse {
   important_dates?: Array<unknown>;
   extracted_entities?: Array<unknown>;
   error_message?: string;
+  // Document Intelligence fields (priority/deadline engines) - see
+  // services.py's _serialize_document_intelligence. classified_document_type
+  // is the deterministic taxonomy value, distinct from the free-form
+  // document_type above.
+  sender_category?: string | null;
+  sender_institution?: string | null;
+  classified_document_type?: string | null;
+  priority_level?: PriorityLevel | null;
+  priority_reasoning?: string | null;
+  deadline_raw_text?: string | null;
+  deadline_type?: string | null;
+  deadline_estimated_date?: string | null;
+  deadline_certainty?: string | null;
+  requires_action?: boolean | null;
+  action_summary?: string | null;
 }
 
 export type PriorityLevel = 'critical' | 'high' | 'normal' | 'low';

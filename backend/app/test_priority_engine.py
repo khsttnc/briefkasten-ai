@@ -52,6 +52,34 @@ class MahnungVsMahnbescheidTestCase(unittest.TestCase):
         self.assertEqual(result.priority_level, "high")
 
 
+class KuendigungTestCase(unittest.TestCase):
+    """Kündigung (termination notice) must never be conflated with Mahnung
+    (informal payment reminder) - they are unrelated document types with
+    very different consequences, and this taxonomy gap was the root cause
+    of a real employment-termination letter being misclassified as
+    Mahnung."""
+
+    def test_kuendigung_alone_scores_like_bescheid(self):
+        result = classify_priority(PriorityInput(document_type="Kündigung"))
+        # 2 (Kündigung) -> normal, same weight class as Bescheid.
+        self.assertEqual(result.priority_level, "normal")
+
+    def test_kuendigung_is_not_floored_to_high(self):
+        result = classify_priority(PriorityInput(document_type="Kündigung"))
+        self.assertNotEqual(result.priority_level, "high")
+
+    def test_kuendigung_with_absolute_deadline_reaches_high(self):
+        result = classify_priority(
+            PriorityInput(
+                document_type="Kündigung",
+                deadline_type="absolute",
+                deadline_certainty="exact",
+            )
+        )
+        # 2 (Kündigung) + 2 (absolute deadline) = 4 -> high
+        self.assertEqual(result.priority_level, "high")
+
+
 class ScoringTestCase(unittest.TestCase):
     def test_no_signals_is_low(self):
         result = classify_priority(PriorityInput())

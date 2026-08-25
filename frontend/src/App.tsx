@@ -173,6 +173,10 @@ function AppHome() {
   const [error, setError] = useState<AppError | null>(null);
   const [loading, setLoading] = useState(false);
   const [aiLoading, setAILoading] = useState(false);
+  // Bumped after a successful AI analysis to force MeineDokumente to
+  // remount and re-fetch - otherwise a document analyzed in the current
+  // session never shows its priority/deadline there until the page reloads.
+  const [documentsRefreshKey, setDocumentsRefreshKey] = useState(0);
 
   const documentId = useMemo(() => uploadResult?.id ?? null, [uploadResult]);
 
@@ -234,6 +238,7 @@ function AppHome() {
       const response = await analyzeDocumentAIById(documentId);
       setAIResult(response);
       setStatusMessage('AI analizi tamamlandı. Sonuçlar aşağıda gösteriliyor.');
+      setDocumentsRefreshKey((key) => key + 1);
     } catch (err) {
       setError({ message: err instanceof Error ? err.message : 'AI analizi sırasında bir hata oluştu.' });
       setStatusMessage('');
@@ -369,6 +374,39 @@ function AppHome() {
                   </div>
                 </div>
               )}
+              {(aiResult.priority_level || aiResult.deadline_estimated_date || aiResult.action_summary) && (
+                <div className="info-grid">
+                  {aiResult.priority_level && (
+                    <div>
+                      <label>Öncelik</label>
+                      <p>{PRIORITY_LABELS[aiResult.priority_level]}</p>
+                    </div>
+                  )}
+                  {aiResult.sender_institution && (
+                    <div>
+                      <label>Gönderen</label>
+                      <p>{aiResult.sender_institution}</p>
+                    </div>
+                  )}
+                  {aiResult.deadline_estimated_date && (
+                    <div>
+                      <label>Son Tarih</label>
+                      <p>
+                        {aiResult.deadline_estimated_date.slice(0, 10)}
+                        {aiResult.deadline_certainty === 'unknown_needs_review'
+                          ? ' (belirsiz, kontrol edin)'
+                          : ''}
+                      </p>
+                    </div>
+                  )}
+                  {aiResult.action_summary && (
+                    <div>
+                      <label>Yapılması Gereken</label>
+                      <p>{aiResult.action_summary}</p>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -377,7 +415,7 @@ function AppHome() {
           )}
         </section>
 
-        <MeineDokumente />
+        <MeineDokumente key={documentsRefreshKey} />
       </main>
       </AuthGate>
       </div>

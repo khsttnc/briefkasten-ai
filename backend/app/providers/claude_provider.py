@@ -12,7 +12,13 @@ from anthropic import (
 )
 
 from ..ai_service import AIAnalysisResult, BaseAIProvider
-from ..config import ANTHROPIC_API_KEY_ENV, ANTHROPIC_MODEL_ENV, DEFAULT_ANTHROPIC_MODEL
+from ..config import (
+    ANTHROPIC_API_KEY_ENV,
+    ANTHROPIC_MODEL_ENV,
+    DEFAULT_ANTHROPIC_MODEL,
+    env_or_default,
+)
+from ..document_intelligence import OUTPUT_LANGUAGE_NAME
 
 
 def _load_json_safe(text: str) -> Optional[Dict[str, Any]]:
@@ -29,7 +35,9 @@ def _build_claude_prompt(text: str) -> str:
         "turkish_explanation, important_dates, extracted_entities. "
         "The response must be valid JSON only, without extra commentary. "
         "Do not hallucinate. If a detail is uncertain, state that clearly in the output. "
-        "Analyze the document and provide the output in Turkish for the explanation fields. "
+        f"Both summary and turkish_explanation MUST be written in the "
+        f"{OUTPUT_LANGUAGE_NAME.upper()} language, regardless of the document's own language - "
+        "never English, never German. "
         "Important entities should include people, companies, reference numbers, file numbers, amounts, and other relevant identifiers. "
         "Document type should describe what the document is (invoice, letter, contract, notice, application, etc.). "
         "If the input text contains German content, base the language detection on the document itself. "
@@ -46,7 +54,7 @@ class ClaudeProvider(BaseAIProvider):
             )
 
         self.client = Anthropic(api_key=api_key)
-        self._model = os.getenv(ANTHROPIC_MODEL_ENV, DEFAULT_ANTHROPIC_MODEL)
+        self._model = env_or_default(ANTHROPIC_MODEL_ENV, DEFAULT_ANTHROPIC_MODEL)
 
     @property
     def provider_name(self) -> str:

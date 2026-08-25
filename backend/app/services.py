@@ -11,7 +11,7 @@ import fitz
 from PIL import Image
 import pytesseract
 
-from .config import TESSERACT_CMD, UPLOAD_FOLDER
+from .config import TESSERACT_CMD, UPLOAD_FOLDER, env_or_default
 
 pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
 
@@ -28,7 +28,7 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 UPLOAD_ROOT = Path(UPLOAD_FOLDER).resolve()
 
 ALLOWED_UPLOAD_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".tif"}
-MAX_UPLOAD_SIZE_BYTES = int(os.getenv("MAX_UPLOAD_SIZE_MB", "50")) * 1024 * 1024
+MAX_UPLOAD_SIZE_BYTES = int(env_or_default("MAX_UPLOAD_SIZE_MB", "50")) * 1024 * 1024
 UPLOAD_CHUNK_SIZE = 1024 * 1024
 
 _UNSAFE_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._ \-]")
@@ -250,7 +250,31 @@ def analyze_document_by_id(document_id: int, db: Session, owner_id: int) -> dict
     return _ensure_document_analyzed(document, db)
 
 
-def _serialize_completed_analysis(analysis: DocumentAIAnalysis) -> dict:
+def _serialize_document_intelligence(document: Document) -> dict:
+    # "classified_document_type", not "document_type": the AI-analysis
+    # response already carries the LLM's free-form document_type label
+    # (DocumentAIAnalysis.document_type) under that key - this is the
+    # separate, deterministic-taxonomy-facing value the priority engine
+    # produced (see document_intelligence.py), and colliding the two under
+    # one key would silently drop whichever was assigned second.
+    return {
+        "sender_category": document.sender_category,
+        "sender_institution": document.sender_institution,
+        "classified_document_type": document.document_type,
+        "priority_level": document.priority_level,
+        "priority_reasoning": document.priority_reasoning,
+        "deadline_raw_text": document.deadline_raw_text,
+        "deadline_type": document.deadline_type,
+        "deadline_estimated_date": (
+            document.deadline_estimated_date.isoformat() if document.deadline_estimated_date else None
+        ),
+        "deadline_certainty": document.deadline_certainty,
+        "requires_action": document.requires_action,
+        "action_summary": document.action_summary,
+    }
+
+
+def _serialize_completed_analysis(analysis: DocumentAIAnalysis, document: Document) -> dict:
     return {
         "analysis_id": analysis.id,
         "document_id": analysis.document_id,
@@ -264,6 +288,7 @@ def _serialize_completed_analysis(analysis: DocumentAIAnalysis) -> dict:
         "important_dates": json.loads(analysis.important_dates) if analysis.important_dates else [],
         "extracted_entities": json.loads(analysis.extracted_entities) if analysis.extracted_entities else [],
         "error_message": analysis.error_message,
+        **_serialize_document_intelligence(document),
     }
 
 
@@ -294,7 +319,7 @@ def analyze_document_ai_by_id(document_id: int, db: Session, owner_id: int) -> d
         .first()
     )
     if existing_analysis is not None:
-        return _serialize_completed_analysis(existing_analysis)
+        return _serialize_completed_analysis(existing_analysis, document)
 
     if not document.text or not document.text.strip():
         _ensure_document_analyzed(document, db)
@@ -382,6 +407,7 @@ def analyze_document_ai_by_id(document_id: int, db: Session, owner_id: int) -> d
         "important_dates": analysis_result.important_dates or [],
         "extracted_entities": analysis_result.extracted_entities or [],
         "error_message": analysis_record.error_message,
+        **_serialize_document_intelligence(document),
     }
 
     if analysis_result.error_message:

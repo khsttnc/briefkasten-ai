@@ -1,5 +1,4 @@
 import logging
-import os
 from typing import Optional
 
 from fastapi import Depends, FastAPI, File, Query, Request, UploadFile
@@ -9,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from .auth import get_current_user
 from .billing import process_stripe_webhook
-from .config import DEFAULT_FRONTEND_ORIGIN, FRONTEND_ORIGIN_ENV
+from .config import DEFAULT_FRONTEND_ORIGIN, FRONTEND_ORIGIN_ENV, env_or_default
 from .database import engine, get_db
 from .models import Base, User
 from .services import (
@@ -35,7 +34,7 @@ app = FastAPI(
 # carry Authorization headers. See config.py for the env var / default.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[os.getenv(FRONTEND_ORIGIN_ENV, DEFAULT_FRONTEND_ORIGIN)],
+    allow_origins=[env_or_default(FRONTEND_ORIGIN_ENV, DEFAULT_FRONTEND_ORIGIN)],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

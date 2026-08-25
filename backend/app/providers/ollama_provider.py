@@ -7,7 +7,12 @@ import urllib.request
 from typing import Any, Dict, List, Optional
 
 from ..ai_service import AIAnalysisResult, BaseAIProvider
-from ..config import DEFAULT_OLLAMA_BASE_URL, OLLAMA_BASE_URL_ENV, OLLAMA_MODEL_ENV
+from ..config import (
+    DEFAULT_OLLAMA_BASE_URL,
+    OLLAMA_BASE_URL_ENV,
+    OLLAMA_MODEL_ENV,
+    env_or_default,
+)
 from ..document_intelligence import (
     ACTION_SUMMARY_KEY,
     CLASSIFIED_DOCUMENT_TYPE_KEY,
@@ -15,6 +20,7 @@ from ..document_intelligence import (
     DOCUMENT_DATE_KEY,
     MULTIPLE_DEADLINES_DETECTED_KEY,
     OBJECTION_RIGHT_KEY,
+    OUTPUT_LANGUAGE_NAME,
     PAYMENT_REQUESTED_KEY,
     REQUIRES_ACTION_KEY,
     SENDER_CATEGORY_KEY,
@@ -117,9 +123,12 @@ def _build_ollama_prompt(text: str, task: Optional[str] = None) -> str:
         return (
             "You are an AI assistant analyzing a German official or corporate document. "
             "Return a valid JSON object with the keys: summary and turkish_explanation. "
-            "The value of turkish_explanation MUST be written in the TURKISH language. "
-            "It must explain in Turkish what the document means, its important consequences, "
-            "and what the reader should do next. "
+            f"BOTH summary and turkish_explanation MUST be written in the "
+            f"{OUTPUT_LANGUAGE_NAME.upper()} language, regardless of the document's own "
+            "language - never English, never German. "
+            f"summary is a short (1-2 sentence) {OUTPUT_LANGUAGE_NAME} summary of the document; "
+            f"turkish_explanation is the fuller {OUTPUT_LANGUAGE_NAME} explanation of what the "
+            "document means, its important consequences, and what the reader should do next. "
             "Do not include any additional text or explanation. "
             "If a value is uncertain, use null. "
             f"Text:\n{text}\n"
@@ -149,9 +158,12 @@ def _build_ollama_prompt(text: str, task: Optional[str] = None) -> str:
         "explicitly labeled as eVB (e.g. \"eVB-Nummer: 12345678\"). The words \"eVB\", "
         "\"Versicherungsbestätigung\", or \"Versicherungsbestätigungsnummer\" alone are not "
         "numbers - if no such number is present, omit eVB_number entirely. "
-        "The value of turkish_explanation MUST be written in the TURKISH language, regardless of "
-        "the document's own language. It must explain in Turkish what the document means, its "
-        "important consequences (for example contracts being cancelled, confirmations being "
+        f"The values of BOTH summary and turkish_explanation MUST be written in the "
+        f"{OUTPUT_LANGUAGE_NAME.upper()} language, regardless of the document's own language - "
+        "never English, never German. "
+        f"summary is a short (1-2 sentence) {OUTPUT_LANGUAGE_NAME} summary of the document; "
+        f"turkish_explanation must explain in {OUTPUT_LANGUAGE_NAME} what the document means, "
+        "its important consequences (for example contracts being cancelled, confirmations being "
         "withdrawn, or new documents being required), and what the reader should do next. "
         "When the text uses these German insurance terms, use exactly this Turkish meaning: "
         "Kfz-Haftpflichtversicherung = zorunlu trafik sigortası, always. The word \"kasko\" "
@@ -185,10 +197,15 @@ def _build_ollama_prompt(text: str, task: Optional[str] = None) -> str:
         f"{SENDER_INSTITUTION_KEY} is the specific sender's name as written in the text (for "
         "example \"Jobcenter Berlin Mitte\"), or null if it cannot be identified. "
         f"{CLASSIFIED_DOCUMENT_TYPE_KEY} must be exactly one of: Mahnbescheid, Anhörung, "
-        "Änderungsbescheid, Steuerbescheid, Bescheid, Mahnung, Rechnung, Information - or null if "
-        "none clearly applies. Mahnbescheid is a formal, court-issued payment order (gerichtliches "
-        "Mahnverfahren); Mahnung is only an informal payment reminder with no court involved - "
-        "these are two different values, never use one when the text supports the other. Anhörung "
+        "Änderungsbescheid, Steuerbescheid, Bescheid, Mahnung, Kündigung, Rechnung, Information - or "
+        "null if none clearly applies. Mahnbescheid is a formal, court-issued payment order "
+        "(gerichtliches Mahnverfahren); Mahnung is only an informal payment reminder with no court "
+        "involved - these are two different values, never use one when the text supports the other. "
+        "Kündigung is a termination notice ending a contract, tenancy, or employment relationship "
+        "(e.g. \"wir kündigen das Arbeitsverhältnis\", \"Kündigung des Mietvertrags\") - it is never "
+        "a Mahnung (Kündigung ends a relationship/agreement, Mahnung only demands an overdue "
+        "payment; do not use Mahnung just because a Kündigung letter also happens to mention money "
+        "or deadlines). Anhörung "
         "is a hearing notice giving the reader a chance to respond before a decision is finalized. "
         "Bescheid is any letter that announces a formal decision about a claim, benefit, or "
         "application (bewilligt, lehnt ab, setzt fest, gewährt) - if the document's own heading "
@@ -223,8 +240,8 @@ def _build_ollama_prompt(text: str, task: Optional[str] = None) -> str:
         f"{MULTIPLE_DEADLINES_DETECTED_KEY} must be true. If only one deadline/response-period "
         f"phrase is present, {MULTIPLE_DEADLINES_DETECTED_KEY} must be false. When "
         f"{MULTIPLE_DEADLINES_DETECTED_KEY} is true, {ACTION_SUMMARY_KEY} must explicitly say (in "
-        "Turkish) that more than one deadline was found in the document and the reader should "
-        "check it carefully themselves. "
+        f"{OUTPUT_LANGUAGE_NAME}) that more than one deadline was found in the document and the "
+        "reader should check it carefully themselves. "
         f"{DOCUMENT_DATE_KEY} is the date printed on the document itself (near a label such as "
         "\"Datum\" or \"Bescheid vom\"), formatted YYYY-MM-DD, only if that exact date is present "
         "in the text - never guess, compute, or use today's date. Use null if no such date is "
@@ -240,8 +257,9 @@ def _build_ollama_prompt(text: str, task: Optional[str] = None) -> str:
         "one of those three exact words also appears somewhere in the text; "
         f"{MULTIPLE_DEADLINES_DETECTED_KEY} is as "
         "defined above. "
-        f"{ACTION_SUMMARY_KEY} is a short summary, at most about 20 words, IN TURKISH, of what the "
-        f"reader needs to do. Use null if {REQUIRES_ACTION_KEY} is false. "
+        f"{ACTION_SUMMARY_KEY} is a short summary, at most about 20 words, IN "
+        f"{OUTPUT_LANGUAGE_NAME.upper()}, of what the reader needs to do. Use null if "
+        f"{REQUIRES_ACTION_KEY} is false. "
         "Do not include any additional text or explanation. "
         f"Text:\n{text}\n"
     )
@@ -249,7 +267,7 @@ def _build_ollama_prompt(text: str, task: Optional[str] = None) -> str:
 
 class OllamaProvider(BaseAIProvider):
     def __init__(self) -> None:
-        self.base_url = os.getenv(OLLAMA_BASE_URL_ENV, DEFAULT_OLLAMA_BASE_URL)
+        self.base_url = env_or_default(OLLAMA_BASE_URL_ENV, DEFAULT_OLLAMA_BASE_URL)
         self._model = os.getenv(OLLAMA_MODEL_ENV)
         if not self._model:
             raise RuntimeError(

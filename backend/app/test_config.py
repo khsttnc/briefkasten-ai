@@ -49,5 +49,35 @@ class TestDotenvOverridesStaleEnvVars(unittest.TestCase):
             )
 
 
+class EnvOrDefaultTestCase(unittest.TestCase):
+    """Regression test for: os.getenv(NAME, default) only falls back to
+    `default` when NAME is entirely absent from the environment - a
+    variable that IS present but set to an empty string (e.g. a "NAME="
+    line copied verbatim from .env.example without filling it in) makes
+    plain os.getenv return "" instead. This broke TESSERACT_CMD,
+    NVIDIA_BASE_URL, and NVIDIA_MODEL in production."""
+
+    def test_missing_var_returns_default(self):
+        with patch.dict("os.environ", {}, clear=False):
+            import os as os_module
+
+            os_module.environ.pop("SOME_UNSET_VAR", None)
+            self.assertEqual(
+                config_module.env_or_default("SOME_UNSET_VAR", "fallback"), "fallback"
+            )
+
+    def test_empty_string_var_returns_default(self):
+        with patch.dict("os.environ", {"SOME_EMPTY_VAR": ""}):
+            self.assertEqual(
+                config_module.env_or_default("SOME_EMPTY_VAR", "fallback"), "fallback"
+            )
+
+    def test_non_empty_var_returns_its_own_value(self):
+        with patch.dict("os.environ", {"SOME_SET_VAR": "actual-value"}):
+            self.assertEqual(
+                config_module.env_or_default("SOME_SET_VAR", "fallback"), "actual-value"
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

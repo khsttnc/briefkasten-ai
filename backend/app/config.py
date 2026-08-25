@@ -16,10 +16,24 @@ try:
 except ImportError:
     pass
 
-DATABASE_PATH = BASE_DIR / "briefkasten.db"
-DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DATABASE_PATH.as_posix()}")
+def env_or_default(name: str, default: str) -> str:
+    """os.getenv(name, default), but empty-string-safe.
 
-UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", str(BASE_DIR / "uploads"))
+    Plain os.getenv only falls back to `default` when `name` is entirely
+    absent from the environment - a variable that IS present but set to an
+    empty value (e.g. a "NAME=" line copied verbatim from .env.example
+    without filling it in) makes it return "" instead. That silently broke
+    TESSERACT_CMD, NVIDIA_BASE_URL, and NVIDIA_MODEL in production. Treat
+    "" the same as unset everywhere a real default exists.
+    """
+    value = os.getenv(name)
+    return value if value else default
+
+
+DATABASE_PATH = BASE_DIR / "briefkasten.db"
+DATABASE_URL = env_or_default("DATABASE_URL", f"sqlite:///{DATABASE_PATH.as_posix()}")
+
+UPLOAD_FOLDER = env_or_default("UPLOAD_FOLDER", str(BASE_DIR / "uploads"))
 
 def _default_tesseract_cmd() -> str:
     # Windows installers don't add tesseract.exe to PATH, so keep the known
@@ -30,7 +44,7 @@ def _default_tesseract_cmd() -> str:
     return "tesseract"
 
 
-TESSERACT_CMD = os.getenv("TESSERACT_CMD", _default_tesseract_cmd())
+TESSERACT_CMD = env_or_default("TESSERACT_CMD", _default_tesseract_cmd())
 
 AI_PROVIDER_ENV = "AI_PROVIDER"
 DEFAULT_AI_PROVIDER = "claude"

@@ -43,6 +43,14 @@ _DOCUMENT_TYPE_POINTS = {
     "Änderungsbescheid": 2,
     "Steuerbescheid": 2,
     "Bescheid": 2,
+    # Same weight class as Bescheid: a termination (employment, tenancy,
+    # contract) is a consequential formal notice, but - unlike Anhörung/
+    # Mahnbescheid - not inherently time-critical on its own (a landlord's
+    # Kündigung carries none of the urgency an employment Kündigung's SGB
+    # III reporting duty does), so it is not floored to "high" here; a real
+    # deadline extracted alongside it already pushes the score up on its
+    # own merit.
+    "Kündigung": 2,
     "Mahnung": 1,
     "Rechnung": 1,
     "Information": 0,

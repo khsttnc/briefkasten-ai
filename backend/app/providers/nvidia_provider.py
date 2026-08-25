@@ -13,6 +13,7 @@ from ..config import (
     NVIDIA_API_KEY_ENV,
     NVIDIA_BASE_URL_ENV,
     NVIDIA_MODEL_ENV,
+    env_or_default,
 )
 # Reused, not retyped: the Document Intelligence signal-key prompt is
 # provider-agnostic text built from document_intelligence.SIGNAL_KEYS. Step 4
@@ -67,8 +68,8 @@ class NvidiaProvider(BaseAIProvider):
             )
 
         self._api_key = api_key
-        self._model = os.getenv(NVIDIA_MODEL_ENV, DEFAULT_NVIDIA_MODEL)
-        self._base_url = os.getenv(NVIDIA_BASE_URL_ENV, DEFAULT_NVIDIA_BASE_URL)
+        self._model = env_or_default(NVIDIA_MODEL_ENV, DEFAULT_NVIDIA_MODEL)
+        self._base_url = env_or_default(NVIDIA_BASE_URL_ENV, DEFAULT_NVIDIA_BASE_URL)
 
     @property
     def provider_name(self) -> str:
