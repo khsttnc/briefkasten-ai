@@ -82,3 +82,35 @@ DEFAULT_FRONTEND_ORIGIN = "http://localhost:5173"
 # loudly (billing.py returns 503), never silently accept an unverified
 # webhook payload.
 STRIPE_WEBHOOK_SECRET_ENV = "STRIPE_WEBHOOK_SECRET"
+
+# --- Rate limiting (slowapi) ---
+# Security review finding: /upload and the AI-analyze endpoint had no
+# request-rate limit at all - a single account could call either
+# unboundedly, which is both a trivial CPU-exhaustion DoS (OCR is
+# CPU-heavy) and a direct cost-abuse vector against the paid AI provider
+# API. Values are deliberately generous for a real user's normal workflow
+# (uploading/analyzing a handful of documents in a sitting) while still
+# bounding worst-case abuse. slowapi rate-string format: "<count>/<period>".
+DEFAULT_RATE_LIMIT = env_or_default("DEFAULT_RATE_LIMIT", "60/minute")
+UPLOAD_RATE_LIMIT = env_or_default("UPLOAD_RATE_LIMIT", "10/minute")
+AI_ANALYZE_RATE_LIMIT = env_or_default("AI_ANALYZE_RATE_LIMIT", "10/minute")
+
+# --- Document processing limits ---
+# Security review finding: no cap existed on a PDF's page count or on a
+# page's rendered pixel dimensions before OCR - a small-file-size but
+# pathological PDF (thousands of pages, or a page/MediaBox declaring an
+# enormous size) could tie up a worker for a long time or exhaust memory
+# in fitz.Page.get_pixmap(), independent of MAX_UPLOAD_SIZE_MB (which only
+# bounds bytes on disk, not page count or declared page dimensions).
+#
+# MAX_DOCUMENT_PAGES: document_processing.py's own truncation-ceiling
+# comment already established "a ~200-page contract or insurance policy"
+# as the realistic worst case seen in practice; 300 keeps a margin above
+# that without allowing an effectively unbounded page count.
+MAX_DOCUMENT_PAGES = int(env_or_default("MAX_DOCUMENT_PAGES", "300"))
+# MAX_PAGE_DIMENSION_POINTS: fitz reports page size in points (1/72 inch)
+# via page.rect: real documents (A4, Letter, Legal, even an A0 poster) are
+# all well under 3000pt on their longest side. 5000pt (~69in / ~1.75m)
+# comfortably covers any real scanned page while still bounding the
+# pixmap buffer get_pixmap() would allocate at default (1:1) resolution.
+MAX_PAGE_DIMENSION_POINTS = int(env_or_default("MAX_PAGE_DIMENSION_POINTS", "5000"))

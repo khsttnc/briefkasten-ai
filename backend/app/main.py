@@ -4,11 +4,22 @@ from typing import Optional
 from fastapi import Depends, FastAPI, File, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
 
 from .auth import get_current_user
 from .billing import process_stripe_webhook
-from .config import DEFAULT_FRONTEND_ORIGIN, FRONTEND_ORIGIN_ENV, env_or_default
+from .config import (
+    AI_ANALYZE_RATE_LIMIT,
+    DEFAULT_FRONTEND_ORIGIN,
+    DEFAULT_RATE_LIMIT,
+    FRONTEND_ORIGIN_ENV,
+    UPLOAD_RATE_LIMIT,
+    env_or_default,
+)
 from .database import engine, get_db
 from .models import Base, User
 from .services import (
@@ -39,6 +50,27 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _rate_limit_key(request: Request) -> str:
+    # Keyed by authenticated user id when available (set by auth.py's
+    # get_current_user via request.state.user_id) so a per-account limit
+    # is enforced regardless of shared/rotating IPs. Falls back to the
+    # client IP for requests the default (middleware-level) limit checks
+    # before FastAPI has resolved the route's auth dependency - e.g. the
+    # global default_limits below, which run before get_current_user - and
+    # for genuinely unauthenticated routes like /webhooks/stripe.
+    user_id = getattr(request.state, "user_id", None)
+    return f"user:{user_id}" if user_id is not None else get_remote_address(request)
+
+
+# In-memory storage (no Redis) is deliberate: this deploys as a single
+# backend container (see docker-compose.yml), not a horizontally-scaled
+# fleet, so there is exactly one process whose memory needs to agree.
+limiter = Limiter(key_func=_rate_limit_key, default_limits=[DEFAULT_RATE_LIMIT])
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 
 @app.exception_handler(Exception)
@@ -73,7 +105,9 @@ def health():
 
 
 @app.post("/upload")
+@limiter.limit(UPLOAD_RATE_LIMIT)
 async def upload_document(
+    request: Request,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -97,7 +131,9 @@ def analyze_document_by_id_route(
 
 
 @app.post("/analyze/id/{document_id}/ai")
+@limiter.limit(AI_ANALYZE_RATE_LIMIT)
 def analyze_document_ai_by_id_route(
+    request: Request,
     document_id: int,
     force: bool = False,
     db: Session = Depends(get_db),

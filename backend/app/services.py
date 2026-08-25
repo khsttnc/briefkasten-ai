@@ -11,7 +11,13 @@ import fitz
 from PIL import Image
 import pytesseract
 
-from .config import TESSERACT_CMD, UPLOAD_FOLDER, env_or_default
+from .config import (
+    MAX_DOCUMENT_PAGES,
+    MAX_PAGE_DIMENSION_POINTS,
+    TESSERACT_CMD,
+    UPLOAD_FOLDER,
+    env_or_default,
+)
 
 pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
 
@@ -130,6 +136,32 @@ def save_document(file: UploadFile, db: Session, owner_id: int) -> Document:
     return document
 
 
+def _validate_page_limits(doc: fitz.Document) -> None:
+    """Rejects a document whose page count or per-page dimensions could turn
+    text/OCR extraction into an unbounded CPU/memory sink - a small file on
+    disk (MAX_UPLOAD_SIZE_MB doesn't help here) can still declare thousands
+    of pages or an enormous page/MediaBox size. Applies to both PDFs
+    (page_count > 1) and images (fitz opens a raster image as a single-page
+    "document", so this also bounds a maliciously huge image's pixel
+    dimensions before get_pixmap() would allocate a buffer for it)."""
+    if doc.page_count > MAX_DOCUMENT_PAGES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Document has too many pages ({doc.page_count}); the limit is {MAX_DOCUMENT_PAGES}.",
+        )
+
+    for page in doc:
+        if page.rect.width > MAX_PAGE_DIMENSION_POINTS or page.rect.height > MAX_PAGE_DIMENSION_POINTS:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Page {page.number + 1} is too large "
+                    f"({page.rect.width:.0f}x{page.rect.height:.0f}); "
+                    f"the limit is {MAX_PAGE_DIMENSION_POINTS}x{MAX_PAGE_DIMENSION_POINTS}."
+                ),
+            )
+
+
 def extract_text_with_ocr(filepath: str) -> str:
     try:
         doc = fitz.open(filepath)
@@ -140,6 +172,7 @@ def extract_text_with_ocr(filepath: str) -> str:
         ) from exc
 
     try:
+        _validate_page_limits(doc)
         pages_text = []
         for page in doc:
             pix = page.get_pixmap(alpha=False)
@@ -179,15 +212,26 @@ def _ensure_document_analyzed(document: Document, db: Session) -> dict:
 
     try:
         doc = fitz.open(document.filepath)
-        text = ""
-        for page in doc:
-            text += page.get_text()
-        doc.close()
     except Exception as exc:
         raise HTTPException(
             status_code=422,
             detail="Uploaded file could not be read as a valid document.",
         ) from exc
+
+    try:
+        _validate_page_limits(doc)
+        text = ""
+        for page in doc:
+            text += page.get_text()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="Uploaded file could not be read as a valid document.",
+        ) from exc
+    finally:
+        doc.close()
 
     meaningful_text = text.strip()
     if meaningful_text:

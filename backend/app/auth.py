@@ -4,7 +4,7 @@ import os
 from typing import Optional
 
 import jwt
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Request
 from jwt import PyJWKClient
 from jwt.exceptions import PyJWKClientConnectionError, PyJWKClientError
 from sqlalchemy.orm import Session
@@ -45,6 +45,7 @@ def _get_jwks_client() -> PyJWKClient:
 def get_current_user(
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
+    request: Request = None,
 ) -> User:
     """Verifies the Supabase Auth JWT on the request and resolves it to an
     internal User row, matched by the token's "sub" claim.
@@ -56,7 +57,14 @@ def get_current_user(
 
     Ownership/authorization decisions never trust anything from the request
     body or query params - only this dependency's return value (see
-    services.py, which takes owner_id from here, never from the client)."""
+    services.py, which takes owner_id from here, never from the client).
+
+    `request` is optional (default None) purely so existing unit tests can
+    keep calling this function directly without a real Request object -
+    FastAPI always injects the real one in production regardless of the
+    default. When present, the resolved user's id is stashed on
+    request.state so the rate limiter (see main.py) can key limits per
+    authenticated user instead of falling back to per-IP."""
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing bearer token.")
 
@@ -95,5 +103,8 @@ def get_current_user(
         db.add(user)
         db.commit()
         db.refresh(user)
+
+    if request is not None:
+        request.state.user_id = user.id
 
     return user
