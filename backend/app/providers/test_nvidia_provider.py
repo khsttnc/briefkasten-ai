@@ -5,7 +5,7 @@ import urllib.error
 
 from .. import document_intelligence
 from ..ai_service import AIAnalysisResult
-from .nvidia_provider import NvidiaProvider, _build_nvidia_prompt
+from .nvidia_provider import NvidiaProvider, _build_nvidia_prompt, _load_json_safe
 
 
 class DummyResponse:
@@ -33,6 +33,29 @@ def _openai_style_response(content: str, finish_reason: str = "stop") -> str:
             ]
         }
     )
+
+
+class TestLoadJsonSafe(unittest.TestCase):
+    def test_valid_json(self):
+        self.assertEqual(_load_json_safe('{"a": 1}'), {"a": 1})
+
+    def test_invalid_json(self):
+        self.assertIsNone(_load_json_safe('not json'))
+
+    def test_strips_markdown_fence(self):
+        parsed = _load_json_safe('```json\n{"a": 1}\n```')
+        self.assertEqual(parsed, {"a": 1})
+
+    def test_strips_leading_and_trailing_commentary(self):
+        parsed = _load_json_safe('Here you go:\n{"a": 1}\nHope that helps.')
+        self.assertEqual(parsed, {"a": 1})
+
+    def test_strips_surrounding_whitespace(self):
+        parsed = _load_json_safe('\n\n  {"a": 1}  \n\n')
+        self.assertEqual(parsed, {"a": 1})
+
+    def test_still_rejects_garbage_between_braces(self):
+        self.assertIsNone(_load_json_safe('prefix { not valid json } suffix'))
 
 
 class TestNvidiaProvider(unittest.TestCase):
@@ -198,8 +221,11 @@ class TestNvidiaProvider(unittest.TestCase):
         sent_request = mock_urlopen.call_args[0][0]
         sent_body = json.loads(sent_request.data.decode("utf-8"))
         # A real test call against the live API with a realistic
-        # 500,000-character document used ~570-585 completion tokens - this
-        # must stay comfortably above that, not just above the old value.
+        # 500,000-character document used ~570-585 completion tokens before
+        # the entity/sentence prompt caps were added, and 438 after (see
+        # DEFAULT_MAX_TOKENS's comment in nvidia_provider.py) - this must
+        # stay comfortably above both measurements, not just above the old
+        # hardcoded value.
         self.assertGreaterEqual(sent_body["max_tokens"], 2000)
 
 

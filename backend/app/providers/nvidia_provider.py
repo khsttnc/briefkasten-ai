@@ -33,6 +33,15 @@ from .ollama_provider import _build_ollama_prompt as _build_nvidia_prompt
 # was actually finished. See the finish_reason == "length" check in
 # _send_request below, which now treats that condition as a hard failure
 # instead of silently trying to parse a truncated JSON response.
+#
+# Re-measured 2026-08-25 after adding the explicit "at most 15 entities" /
+# "at most 5 sentences" (turkish_explanation) / "at most 2 sentences"
+# (summary) prompt caps: a fresh real test call against the live API, same
+# 500,000-character document shape, used only 438 completion tokens with
+# finish_reason "stop" (not cut off) - lower than the original 570-585
+# measurement, as expected from bounding the two free-text fields. 4000
+# still leaves roughly 9x headroom over this measurement, so the value did
+# not need to move; only the margin got safer.
 DEFAULT_MAX_TOKENS = 4000
 DEFAULT_TEMPERATURE = 0.2
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 120
@@ -58,7 +67,39 @@ def _load_json_safe(text: str) -> Optional[Dict[str, Any]]:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        return None
+        pass
+
+    stripped = text.strip()
+
+    # Some models wrap the JSON in a markdown code fence despite being told
+    # not to add extra text - strip it and retry before giving up.
+    if stripped.startswith("```"):
+        fenced = stripped
+        first_newline = fenced.find("\n")
+        if first_newline != -1:
+            fenced = fenced[first_newline + 1 :]
+        fenced = fenced.strip()
+        if fenced.endswith("```"):
+            fenced = fenced[: -3].strip()
+        try:
+            return json.loads(fenced)
+        except json.JSONDecodeError:
+            pass
+
+    # Last resort: slice from the first "{" to the last "}" so stray leading
+    # or trailing commentary around an otherwise well-formed JSON object
+    # (e.g. "Here is the JSON:\n{...}\nLet me know if...") doesn't sink an
+    # otherwise-valid response. Only trims outside the outermost braces -
+    # never touches anything between them.
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        try:
+            return json.loads(stripped[start : end + 1])
+        except json.JSONDecodeError:
+            return None
+
+    return None
 
 
 def _strip_reasoning_blocks(text: str) -> str:

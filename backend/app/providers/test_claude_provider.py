@@ -40,6 +40,29 @@ class TestClaudeProvider(unittest.TestCase):
     def test_load_json_safe_invalid(self):
         self.assertIsNone(_load_json_safe('not json'))
 
+    def test_load_json_safe_strips_markdown_fence(self):
+        text = '```json\n{"document_type": "contract"}\n```'
+        parsed = _load_json_safe(text)
+        self.assertEqual(parsed['document_type'], 'contract')
+
+    def test_load_json_safe_strips_plain_fence(self):
+        text = '```\n{"document_type": "contract"}\n```'
+        parsed = _load_json_safe(text)
+        self.assertEqual(parsed['document_type'], 'contract')
+
+    def test_load_json_safe_strips_leading_and_trailing_commentary(self):
+        text = 'Here is the JSON:\n{"document_type": "contract"}\nLet me know if you need more.'
+        parsed = _load_json_safe(text)
+        self.assertEqual(parsed['document_type'], 'contract')
+
+    def test_load_json_safe_strips_surrounding_whitespace(self):
+        text = '\n\n  {"document_type": "contract"}  \n\n'
+        parsed = _load_json_safe(text)
+        self.assertEqual(parsed['document_type'], 'contract')
+
+    def test_load_json_safe_still_rejects_garbage_between_braces(self):
+        self.assertIsNone(_load_json_safe('prefix { not valid json } suffix'))
+
     @patch('backend.app.providers.claude_provider.Anthropic')
     @patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'})
     def test_claude_provider_parses_response(self, mock_anthropic):

@@ -80,7 +80,39 @@ def _load_json_safe(text: str) -> Optional[Dict[str, Any]]:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        return None
+        pass
+
+    stripped = text.strip()
+
+    # Some models wrap the JSON in a markdown code fence despite being told
+    # not to add extra text - strip it and retry before giving up.
+    if stripped.startswith("```"):
+        fenced = stripped
+        first_newline = fenced.find("\n")
+        if first_newline != -1:
+            fenced = fenced[first_newline + 1 :]
+        fenced = fenced.strip()
+        if fenced.endswith("```"):
+            fenced = fenced[: -3].strip()
+        try:
+            return json.loads(fenced)
+        except json.JSONDecodeError:
+            pass
+
+    # Last resort: slice from the first "{" to the last "}" so stray leading
+    # or trailing commentary around an otherwise well-formed JSON object
+    # (e.g. "Here is the JSON:\n{...}\nLet me know if...") doesn't sink an
+    # otherwise-valid response. Only trims outside the outermost braces -
+    # never touches anything between them.
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        try:
+            return json.loads(stripped[start : end + 1])
+        except json.JSONDecodeError:
+            return None
+
+    return None
 
 
 def _parse_ollama_streaming_response(text: str) -> Optional[str]:
@@ -129,7 +161,9 @@ def _build_ollama_prompt(text: str, task: Optional[str] = None) -> str:
             "language - never English, never German. "
             f"summary is a short (1-2 sentence) {OUTPUT_LANGUAGE_NAME} summary of the document; "
             f"turkish_explanation is the fuller {OUTPUT_LANGUAGE_NAME} explanation of what the "
-            "document means, its important consequences, and what the reader should do next. "
+            "document means, its important consequences, and what the reader should do next, "
+            "written in AT MOST 5 sentences - do not exceed 5 sentences even if more detail "
+            "would be possible. "
             "Do not include any additional text or explanation. "
             "If a value is uncertain, use null. "
             f"Text:\n{text}\n"
@@ -177,7 +211,9 @@ def _build_ollama_prompt(text: str, task: Optional[str] = None) -> str:
         f"summary is a short (1-2 sentence) {OUTPUT_LANGUAGE_NAME} summary of the document; "
         f"turkish_explanation must explain in {OUTPUT_LANGUAGE_NAME} what the document means, "
         "its important consequences (for example contracts being cancelled, confirmations being "
-        "withdrawn, or new documents being required), and what the reader should do next. "
+        "withdrawn, or new documents being required), and what the reader should do next, "
+        "written in AT MOST 5 sentences - do not exceed 5 sentences even if more detail would "
+        "be possible. "
         "When the text uses these German insurance terms, use exactly this Turkish meaning: "
         "Kfz-Haftpflichtversicherung = zorunlu trafik sigortası, always. The word \"kasko\" "
         "must NEVER appear in turkish_explanation unless the source text literally contains "

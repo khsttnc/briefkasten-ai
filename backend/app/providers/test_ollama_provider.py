@@ -5,7 +5,7 @@ from unittest.mock import patch, MagicMock
 from .. import document_intelligence
 from ..ai_service import AIAnalysisResult
 from . import ollama_provider as ollama_provider_module
-from .ollama_provider import OllamaProvider, _build_ollama_prompt
+from .ollama_provider import OllamaProvider, _build_ollama_prompt, _load_json_safe
 
 
 class DummyResponse:
@@ -20,6 +20,29 @@ class DummyResponse:
 
     def __exit__(self, exc_type, exc, traceback):
         return False
+
+
+class TestLoadJsonSafe(unittest.TestCase):
+    def test_valid_json(self):
+        self.assertEqual(_load_json_safe('{"a": 1}'), {"a": 1})
+
+    def test_invalid_json(self):
+        self.assertIsNone(_load_json_safe('not json'))
+
+    def test_strips_markdown_fence(self):
+        parsed = _load_json_safe('```json\n{"a": 1}\n```')
+        self.assertEqual(parsed, {"a": 1})
+
+    def test_strips_leading_and_trailing_commentary(self):
+        parsed = _load_json_safe('Here you go:\n{"a": 1}\nHope that helps.')
+        self.assertEqual(parsed, {"a": 1})
+
+    def test_strips_surrounding_whitespace(self):
+        parsed = _load_json_safe('\n\n  {"a": 1}  \n\n')
+        self.assertEqual(parsed, {"a": 1})
+
+    def test_still_rejects_garbage_between_braces(self):
+        self.assertIsNone(_load_json_safe('prefix { not valid json } suffix'))
 
 
 class TestOllamaProvider(unittest.TestCase):

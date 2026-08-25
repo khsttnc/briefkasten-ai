@@ -25,7 +25,39 @@ def _load_json_safe(text: str) -> Optional[Dict[str, Any]]:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        return None
+        pass
+
+    stripped = text.strip()
+
+    # Some models wrap the JSON in a markdown code fence despite being told
+    # not to add extra text - strip it and retry before giving up.
+    if stripped.startswith("```"):
+        fenced = stripped
+        first_newline = fenced.find("\n")
+        if first_newline != -1:
+            fenced = fenced[first_newline + 1 :]
+        fenced = fenced.strip()
+        if fenced.endswith("```"):
+            fenced = fenced[: -3].strip()
+        try:
+            return json.loads(fenced)
+        except json.JSONDecodeError:
+            pass
+
+    # Last resort: slice from the first "{" to the last "}" so stray leading
+    # or trailing commentary around an otherwise well-formed JSON object
+    # (e.g. "Here is the JSON:\n{...}\nLet me know if...") doesn't sink an
+    # otherwise-valid response. Only trims outside the outermost braces -
+    # never touches anything between them.
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        try:
+            return json.loads(stripped[start : end + 1])
+        except json.JSONDecodeError:
+            return None
+
+    return None
 
 
 def _build_claude_prompt(text: str) -> str:
@@ -42,6 +74,8 @@ def _build_claude_prompt(text: str) -> str:
         f"Both summary and turkish_explanation MUST be written in the "
         f"{OUTPUT_LANGUAGE_NAME.upper()} language, regardless of the document's own language - "
         "never English, never German. "
+        f"summary must be at most 2 sentences. turkish_explanation must be at most 5 "
+        "sentences - do not exceed 5 sentences even if more detail would be possible. "
         "Important entities should include people, companies, reference numbers, file numbers, amounts, and other relevant identifiers. "
         "Document type should describe what the document is (invoice, letter, contract, notice, application, etc.). "
         "If the input text contains German content, base the language detection on the document itself. "
