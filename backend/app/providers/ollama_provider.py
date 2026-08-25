@@ -18,6 +18,7 @@ from ..document_intelligence import (
     CLASSIFIED_DOCUMENT_TYPE_KEY,
     DEADLINE_RAW_TEXT_KEY,
     DOCUMENT_DATE_KEY,
+    EFFECTIVE_DATE_KEY,
     MULTIPLE_DEADLINES_DETECTED_KEY,
     OBJECTION_RIGHT_KEY,
     OUTPUT_LANGUAGE_NAME,
@@ -226,6 +227,16 @@ def _build_ollama_prompt(text: str, task: Optional[str] = None) -> str:
         "\"innerhalb von 14 Tagen\" - writing just \"14 Tagen\" is wrong and will make the "
         "deadline uncomputable even though the number is technically correct. Use null if no "
         "deadline is mentioned. "
+        "If the document is a Kündigung, it commonly separately states a statutory duty to report "
+        "to the Agentur für Arbeit under § 38 SGB III within a short period after receiving or "
+        "becoming aware of the termination (to avoid a Sperrzeit, a benefit-blocking period) - "
+        "phrased for example \"innerhalb von drei Tagen nach Zugang dieser Kündigung\" or "
+        "\"spätestens drei Tage nach Kenntnis der Beendigung\". This reporting duty IS a deadline "
+        f"and MUST be captured in {DEADLINE_RAW_TEXT_KEY} (copied verbatim, per the rules above) "
+        "when present - it is easy to miss because it is a legal obligation on the reader, not a "
+        "response invitation from the sender. Do NOT confuse it with the Kündigung's own "
+        f"employment/contract end date (see {EFFECTIVE_DATE_KEY} below) - the end date is not "
+        f"something the reader must act on and must never be used as {DEADLINE_RAW_TEXT_KEY}. "
         "If the text contains more than one distinct deadline/response-period phrase (for example "
         "a payment or reporting deadline AND a separate objection/appeal deadline), you MUST set "
         f"{MULTIPLE_DEADLINES_DETECTED_KEY} to true, and {DEADLINE_RAW_TEXT_KEY} must still be "
@@ -246,6 +257,14 @@ def _build_ollama_prompt(text: str, task: Optional[str] = None) -> str:
         "\"Datum\" or \"Bescheid vom\"), formatted YYYY-MM-DD, only if that exact date is present "
         "in the text - never guess, compute, or use today's date. Use null if no such date is "
         "found. "
+        f"{EFFECTIVE_DATE_KEY} is the date on which something the document announces actually "
+        "takes effect or ends - for example a Kündigung's employment/tenancy/contract end date "
+        "(\"zum 30.06.2026\", \"zum nächstmöglichen Zeitpunkt. Dies ist unserer Berechnung nach "
+        "der 27.04.2026\"), or a change's effective date - formatted YYYY-MM-DD, only if an exact "
+        f"date is explicitly stated. This is NEVER a deadline: it is not something the reader must "
+        f"respond to or act on by that date, unlike {DEADLINE_RAW_TEXT_KEY}. Use null if no such "
+        "date is stated or the text only says something vague like \"nächstmöglicher Zeitpunkt\" "
+        "without a computed date next to it. "
         f"{REQUIRES_ACTION_KEY}, {PAYMENT_REQUESTED_KEY}, {OBJECTION_RIGHT_KEY}, and "
         f"{MULTIPLE_DEADLINES_DETECTED_KEY} must each be the JSON boolean true or false, never a "
         f"string: {REQUIRES_ACTION_KEY} is true only if the reader must do something (respond, "

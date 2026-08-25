@@ -88,6 +88,38 @@ class FullValidPayloadTestCase(unittest.TestCase):
         self.assertEqual(fields["priority_level"], "high")
 
 
+class EffectiveDateTestCase(unittest.TestCase):
+    """Regression test for: a real Kündigung's employment end date was at
+    risk of being conflated with the reader's actual action deadline (the
+    §38 SGB III Arbeitsagentur reporting duty). effective_date must be
+    parsed and returned independently of deadline_raw_text/deadline_type,
+    and never feed into deadline resolution."""
+
+    def test_effective_date_is_parsed_independently_of_deadline(self):
+        fields = derive_intelligence_fields(
+            {
+                "classified_document_type": "Kündigung",
+                "deadline_raw_text": "spätestens drei Tage nach Zugang dieser Kündigung",
+                "document_date": "2026-01-10",
+                "effective_date": "2026-04-27",
+            }
+        )
+        self.assertEqual(fields["document_type"], "Kündigung")
+        self.assertEqual(fields["effective_date"], date(2026, 4, 27))
+        # deemed delivery: 2026-01-14; +3 days = 2026-01-17 - unaffected by
+        # effective_date, which is a completely separate concept.
+        self.assertEqual(fields["deadline_type"], "relative")
+        self.assertEqual(fields["deadline_estimated_date"], date(2026, 1, 17))
+
+    def test_missing_effective_date_is_none(self):
+        fields = derive_intelligence_fields({"classified_document_type": "Kündigung"})
+        self.assertIsNone(fields["effective_date"])
+
+    def test_malformed_effective_date_is_ignored_not_fatal(self):
+        fields = derive_intelligence_fields({"effective_date": "nächstmöglicher Zeitpunkt"})
+        self.assertIsNone(fields["effective_date"])
+
+
 class MultipleDeadlinesSignalTestCase(unittest.TestCase):
     """Option A from review: multiple_deadlines_detected must flow through
     to resolve_deadline() and downgrade an otherwise-confident date, and

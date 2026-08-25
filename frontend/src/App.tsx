@@ -129,6 +129,9 @@ function MeineDokumente() {
                         : ''}
                     </span>
                   )}
+                  {doc.effective_date && (
+                    <span>Geçerlilik/bitiş tarihi: {doc.effective_date.slice(0, 10)}</span>
+                  )}
                 </div>
                 {doc.action_summary && <p className="document-list-item-action">{doc.action_summary}</p>}
               </li>
@@ -374,7 +377,10 @@ function AppHome() {
                   </div>
                 </div>
               )}
-              {(aiResult.priority_level || aiResult.deadline_estimated_date || aiResult.action_summary) && (
+              {(aiResult.priority_level ||
+                aiResult.deadline_estimated_date ||
+                aiResult.effective_date ||
+                aiResult.action_summary) && (
                 <div className="info-grid">
                   {aiResult.priority_level && (
                     <div>
@@ -397,6 +403,12 @@ function AppHome() {
                           ? ' (belirsiz, kontrol edin)'
                           : ''}
                       </p>
+                    </div>
+                  )}
+                  {aiResult.effective_date && (
+                    <div>
+                      <label>Geçerlilik/Bitiş Tarihi</label>
+                      <p>{aiResult.effective_date.slice(0, 10)}</p>
                     </div>
                   )}
                   {aiResult.action_summary && (

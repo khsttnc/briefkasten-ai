@@ -271,6 +271,7 @@ def _serialize_document_intelligence(document: Document) -> dict:
         "deadline_certainty": document.deadline_certainty,
         "requires_action": document.requires_action,
         "action_summary": document.action_summary,
+        "effective_date": document.effective_date.isoformat() if document.effective_date else None,
     }
 
 
@@ -434,6 +435,7 @@ def _serialize_document_summary(document: Document) -> dict:
         "deadline_certainty": document.deadline_certainty,
         "requires_action": document.requires_action,
         "action_summary": document.action_summary,
+        "effective_date": document.effective_date.isoformat() if document.effective_date else None,
     }
 
 

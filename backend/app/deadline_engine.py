@@ -81,12 +81,42 @@ _MONTH_UNITS = {"monat", "monate", "monaten", "monats"}
 
 _SPELLED_ONE = {"ein", "eine", "einem", "einen", "einer", "eines"}
 
+# Small cardinal numbers 2-10 don't inflect for case in German (unlike
+# "ein"), so one spelling each is enough. Added for phrasings like
+# "spätestens drei Tage nach ..." (a real statutory-deadline clause, e.g.
+# the SGB III Arbeitsagentur reporting duty after a Kündigung) that spell
+# the number out instead of using a digit.
+_SPELLED_TWO_TO_TEN = {
+    "zwei": 2, "drei": 3, "vier": 4, "fünf": 5, "sechs": 6,
+    "sieben": 7, "acht": 8, "neun": 9, "zehn": 10,
+}
+
+_SPELLED_AMOUNT_WORDS = set(_SPELLED_ONE) | set(_SPELLED_TWO_TO_TEN)
+
+# "innerhalb (von) 14 Tagen" / "binnen 2 Wochen" trigger a deadline counted
+# from delivery; "spätestens ... Tage/Wochen/Monate(n) nach ..." is the same
+# kind of relative deadline phrased the other way round (a hard cutoff
+# stated as "no later than N days after X") - both compute identically once
+# the amount/unit are extracted, so they share one pattern. The word(s)
+# after the amount+unit (e.g. "nach Zugang dieser Kündigung") are not
+# captured; they don't affect the computed date and deadline_raw_text (the
+# LLM-copied verbatim phrase) keeps them for human readability.
 _RELATIVE_RE = re.compile(
-    r"\b(?:innerhalb(?:\s+von)?|binnen)\s+"
-    r"(?P<amount>\d{1,3}|" + "|".join(_SPELLED_ONE) + r")\s+"
+    r"\b(?:innerhalb(?:\s+von)?|binnen|spätestens)\s+"
+    r"(?P<amount>\d{1,3}|" + "|".join(_SPELLED_AMOUNT_WORDS) + r")\s+"
     r"(?P<unit>tag|tage|tagen|woche|wochen|monat|monate|monaten|monats)\b",
     re.IGNORECASE,
 )
+
+_SPELLED_AMOUNT_VALUES = {word: 1 for word in _SPELLED_ONE}
+_SPELLED_AMOUNT_VALUES.update(_SPELLED_TWO_TO_TEN)
+
+
+def _resolve_amount(amount_raw: str) -> int:
+    amount_raw = amount_raw.lower()
+    if amount_raw in _SPELLED_AMOUNT_VALUES:
+        return _SPELLED_AMOUNT_VALUES[amount_raw]
+    return int(amount_raw)
 
 
 def _parse_absolute_date(text: str) -> Optional[date]:
@@ -119,9 +149,8 @@ def _parse_relative_duration_days(text: str) -> Optional[int]:
     if not match:
         return None
 
-    amount_raw = match.group("amount").lower()
+    amount = _resolve_amount(match.group("amount"))
     unit = match.group("unit").lower()
-    amount = 1 if amount_raw in _SPELLED_ONE else int(amount_raw)
 
     if unit in _MONTH_UNITS:
         return None  # signal "months" case to the caller separately
@@ -135,8 +164,7 @@ def _parse_relative_duration_months(text: str) -> Optional[int]:
     unit = match.group("unit").lower()
     if unit not in _MONTH_UNITS:
         return None
-    amount_raw = match.group("amount").lower()
-    return 1 if amount_raw in _SPELLED_ONE else int(amount_raw)
+    return _resolve_amount(match.group("amount"))
 
 
 def resolve_deadline(

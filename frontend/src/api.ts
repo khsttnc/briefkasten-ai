@@ -40,6 +40,9 @@ export interface AIAnalysisResponse {
   deadline_certainty?: string | null;
   requires_action?: boolean | null;
   action_summary?: string | null;
+  // Informational only (e.g. a Kündigung's employment end date) - never
+  // an action deadline. Kept separate from deadline_estimated_date.
+  effective_date?: string | null;
 }
 
 export type PriorityLevel = 'critical' | 'high' | 'normal' | 'low';
@@ -59,6 +62,7 @@ export interface DocumentSummary {
   deadline_certainty: string | null;
   requires_action: boolean;
   action_summary: string | null;
+  effective_date: string | null;
 }
 
 export interface DocumentsSummaryCounts {

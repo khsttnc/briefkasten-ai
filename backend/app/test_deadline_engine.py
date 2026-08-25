@@ -64,6 +64,39 @@ class RelativeDeadlineTestCase(unittest.TestCase):
         self.assertEqual(result.deadline_estimated_date, date(2026, 2, 28))
 
 
+class SpaetestensAndSpelledNumbersTestCase(unittest.TestCase):
+    """Regression test for: a real Kündigung's §38 SGB III Arbeitsagentur
+    reporting duty (Sperrzeit risk) used "spätestens drei Tage nach ..."
+    phrasing, which the relative-deadline regex did not recognize at all
+    (only "innerhalb (von)"/"binnen" triggers, and only spelled-out "one",
+    not "drei")."""
+
+    def test_spaetestens_with_spelled_out_drei_tage(self):
+        result = resolve_deadline(
+            "spätestens drei Tage nach Zugang dieser Kündigung",
+            document_date=date(2026, 1, 10),
+        )
+        self.assertEqual(result.deadline_type, "relative")
+        self.assertEqual(result.deadline_certainty, "estimated")
+        # deemed delivery: 2026-01-14; +3 days = 2026-01-17
+        self.assertEqual(result.deadline_estimated_date, date(2026, 1, 17))
+
+    def test_spaetestens_without_document_date_is_unresolved(self):
+        result = resolve_deadline("spätestens drei Tage nach Kenntnis der Kündigung")
+        self.assertEqual(result.deadline_type, "relative")
+        self.assertEqual(result.deadline_certainty, "unknown_needs_review")
+
+    def test_spelled_out_zwei_tage(self):
+        result = resolve_deadline("innerhalb von zwei Tagen", document_date=date(2026, 1, 10))
+        # deemed delivery: 2026-01-14; +2 days = 2026-01-16
+        self.assertEqual(result.deadline_estimated_date, date(2026, 1, 16))
+
+    def test_spelled_out_numbers_up_to_zehn(self):
+        result = resolve_deadline("binnen zehn Tagen", document_date=date(2026, 1, 10))
+        # deemed delivery: 2026-01-14; +10 days = 2026-01-24
+        self.assertEqual(result.deadline_estimated_date, date(2026, 1, 24))
+
+
 class NoOrUnclearDeadlineTestCase(unittest.TestCase):
     def test_empty_text_is_none_and_exact(self):
         result = resolve_deadline(None)

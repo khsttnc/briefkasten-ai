@@ -80,6 +80,14 @@ class Document(Base):
     deadline_certainty = Column(String, nullable=True)  # exact/estimated/unknown_needs_review
     requires_action = Column(Boolean, nullable=True)
     action_summary = Column(Text, nullable=True)
+    # The date something in the document itself takes effect (e.g. a
+    # Kündigung's employment end date, a contract change's effective date)
+    # - informational, NOT an action deadline the reader must meet. Kept
+    # deliberately separate from deadline_estimated_date: conflating a
+    # termination's own end date with the reader's response deadline (e.g.
+    # a statutory reporting duty triggered BY that termination) is
+    # misleading and was a real misclassification risk in practice.
+    effective_date = Column(DateTime, nullable=True)
 
     owner = relationship("User", back_populates="documents")
     analyses = relationship(

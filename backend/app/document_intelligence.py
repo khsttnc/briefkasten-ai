@@ -34,6 +34,14 @@ SENDER_INSTITUTION_KEY = "sender_institution"
 CLASSIFIED_DOCUMENT_TYPE_KEY = "classified_document_type"
 DEADLINE_RAW_TEXT_KEY = "deadline_raw_text"
 DOCUMENT_DATE_KEY = "document_date"
+# The date something IN the document itself takes effect (a Kündigung's
+# employment end date, a contract change's effective date) - informational
+# only, never an action deadline. Deliberately a separate key from
+# deadline_raw_text: a real Kündigung had its own end date incorrectly at
+# risk of being read as "the deadline", when the actual actionable deadline
+# was an unrelated statutory reporting duty triggered BY the termination
+# (see EFFECTIVE_DATE_KEY's prompt instructions in ollama_provider.py).
+EFFECTIVE_DATE_KEY = "effective_date"
 REQUIRES_ACTION_KEY = "requires_action"
 PAYMENT_REQUESTED_KEY = "payment_requested"
 OBJECTION_RIGHT_KEY = "objection_right_mentioned"
@@ -54,6 +62,7 @@ SIGNAL_KEYS = (
     CLASSIFIED_DOCUMENT_TYPE_KEY,
     DEADLINE_RAW_TEXT_KEY,
     DOCUMENT_DATE_KEY,
+    EFFECTIVE_DATE_KEY,
     REQUIRES_ACTION_KEY,
     PAYMENT_REQUESTED_KEY,
     OBJECTION_RIGHT_KEY,
@@ -108,6 +117,7 @@ def _safe_defaults() -> Dict[str, Any]:
         "deadline_certainty": "exact",
         "requires_action": False,
         "action_summary": None,
+        "effective_date": None,
     }
 
 
@@ -128,6 +138,7 @@ def derive_intelligence_fields(raw_response: Optional[Dict[str, Any]]) -> Dict[s
         classified_document_type = _safe_str(payload.get(CLASSIFIED_DOCUMENT_TYPE_KEY))
         deadline_raw_text = _safe_str(payload.get(DEADLINE_RAW_TEXT_KEY))
         document_date = _safe_document_date(payload.get(DOCUMENT_DATE_KEY))
+        effective_date = _safe_document_date(payload.get(EFFECTIVE_DATE_KEY))
         requires_action = _safe_bool(payload.get(REQUIRES_ACTION_KEY))
         payment_requested = _safe_bool(payload.get(PAYMENT_REQUESTED_KEY))
         objection_right_mentioned = _safe_bool(payload.get(OBJECTION_RIGHT_KEY))
@@ -162,6 +173,7 @@ def derive_intelligence_fields(raw_response: Optional[Dict[str, Any]]) -> Dict[s
             "deadline_certainty": deadline.deadline_certainty,
             "requires_action": requires_action,
             "action_summary": action_summary,
+            "effective_date": effective_date,
         }
     except Exception:
         # Belt-and-braces on top of the engines' own fail-closed behavior:
