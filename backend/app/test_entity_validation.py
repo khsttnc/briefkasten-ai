@@ -1,6 +1,10 @@
 import unittest
 
-from .entity_validation import validate_extracted_entities
+from .entity_validation import (
+    MAX_ENTITIES_PER_TYPE_BEFORE_SUMMARIZING,
+    MAX_EXTRACTED_ENTITIES,
+    validate_extracted_entities,
+)
 
 SOURCE_TEXT = (
     "Ihre Kfz-Versicherung AD-5409239121 (bitte stets angeben)\n"
@@ -127,6 +131,57 @@ class OutOfScopeAndMalformedEntitiesTestCase(unittest.TestCase):
         ]
         self.assertEqual(validate_extracted_entities(entities, None), [])
         self.assertEqual(validate_extracted_entities(entities, ""), [])
+
+
+class EntityCountCapTestCase(unittest.TestCase):
+    """Regression test for a real finding: a document with many distinct
+    repeated reference numbers (140 policy numbers in a real test) made the
+    LLM enumerate every single one, ballooning the response to ~6000
+    completion tokens. Must never trust the prompt's own cap - enforce it
+    here regardless of what the LLM actually returned."""
+
+    def test_entities_at_or_under_the_cap_pass_through_unchanged(self):
+        # Distinct types (not one type repeated) - this isolates the
+        # overall-count cap from the per-type collapsing behavior.
+        entities = [
+            {"type": f"type_{i}", "value": f"value_{i}"} for i in range(MAX_EXTRACTED_ENTITIES)
+        ]
+        self.assertEqual(validate_extracted_entities(entities, None), entities)
+
+    def test_many_of_the_same_type_collapse_to_one_count_entry(self):
+        # vehicle_reference (not a _STRICT_EXACT_TYPES member) so source-text
+        # verification doesn't interfere with isolating the capping behavior.
+        count = MAX_ENTITIES_PER_TYPE_BEFORE_SUMMARIZING + 3
+        entities = [
+            {"type": "vehicle_reference", "value": f"AD-{i}"} for i in range(count)
+        ] + [{"type": "customer_name", "value": "extra to force over-cap"}]
+        result = validate_extracted_entities(entities, None)
+        vehicle_entries = [e for e in result if e["type"] == "vehicle_reference"]
+        self.assertEqual(len(vehicle_entries), 1)
+        self.assertIn(str(count), vehicle_entries[0]["value"])
+
+    def test_collapsing_still_respects_the_overall_cap(self):
+        # Many distinct single-occurrence types, none individually over
+        # MAX_ENTITIES_PER_TYPE_BEFORE_SUMMARIZING - per-type collapsing
+        # alone wouldn't reduce this, so the overall truncation must still
+        # apply.
+        entities = [
+            {"type": f"type_{i}", "value": f"value_{i}"} for i in range(MAX_EXTRACTED_ENTITIES + 10)
+        ]
+        result = validate_extracted_entities(entities, None)
+        self.assertLessEqual(len(result), MAX_EXTRACTED_ENTITIES)
+
+    def test_few_entities_of_a_repeated_type_are_not_collapsed(self):
+        # At or below MAX_ENTITIES_PER_TYPE_BEFORE_SUMMARIZING, individual
+        # entries are still useful and must not be summarized away, even
+        # if some other type pushes the total over MAX_EXTRACTED_ENTITIES.
+        few = [{"type": "vehicle_reference", "value": f"AD-{i}"} for i in range(3)]
+        many_other_single_types = [
+            {"type": f"type_{i}", "value": f"value_{i}"} for i in range(MAX_EXTRACTED_ENTITIES)
+        ]
+        result = validate_extracted_entities(few + many_other_single_types, None)
+        vehicle_entries = [e for e in result if e["type"] == "vehicle_reference"]
+        self.assertEqual(len(vehicle_entries), 3)
 
 
 if __name__ == "__main__":

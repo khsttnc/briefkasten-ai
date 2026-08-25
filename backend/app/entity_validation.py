@@ -3,6 +3,71 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional
 
+from .document_intelligence import OUTPUT_LANGUAGE_NAME
+
+# Hard backend cap on the number of entities returned, independent of
+# whatever the prompt asked the LLM for - a document with many distinct
+# repeated reference numbers (e.g. a per-section policy number that varies
+# across a long insurance document) was observed in real testing to make
+# the LLM enumerate every single one, ballooning completion length to
+# ~6000 tokens for one document. Never trust the LLM to self-limit;
+# enforce it here regardless of what the prompt says.
+MAX_EXTRACTED_ENTITIES = 15
+
+# If a single entity type has more than this many distinct validated
+# values, listing every one is less useful to the reader than a single
+# summarizing count - see _collapse_and_cap_entities.
+MAX_ENTITIES_PER_TYPE_BEFORE_SUMMARIZING = 5
+
+_REPEATED_ENTITY_SUMMARY_BY_LANGUAGE = {
+    "Turkish": "{count} adet bulundu",
+}
+
+
+def _repeated_entity_summary(count: int) -> str:
+    template = _REPEATED_ENTITY_SUMMARY_BY_LANGUAGE.get(
+        OUTPUT_LANGUAGE_NAME, _REPEATED_ENTITY_SUMMARY_BY_LANGUAGE["Turkish"]
+    )
+    return template.format(count=count)
+
+
+def _collapse_and_cap_entities(entities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Deterministic, LLM-independent enforcement of MAX_EXTRACTED_ENTITIES.
+
+    A type with many repeated values (e.g. 140 distinct policy numbers from
+    a long multi-section document) collapses into one entry noting the
+    count, which is more useful to the reader than an unbounded list and
+    also keeps the AI-provider response bounded regardless of document size.
+    """
+    by_type: Dict[str, List[Dict[str, Any]]] = {}
+    for entity in entities:
+        type_key = entity.get("type") if isinstance(entity.get("type"), str) else "other"
+        by_type.setdefault(type_key, []).append(entity)
+
+    needs_collapsing = any(
+        len(items) > MAX_ENTITIES_PER_TYPE_BEFORE_SUMMARIZING for items in by_type.values()
+    )
+    if not needs_collapsing and len(entities) <= MAX_EXTRACTED_ENTITIES:
+        # Common case: nothing to collapse or truncate - return the
+        # original list untouched (exact order/objects), rather than
+        # reconstructing it via the type-grouping below, which would
+        # silently reorder entities of the same type that were interleaved
+        # with other types in the source list.
+        return entities
+
+    collapsed: List[Dict[str, Any]] = []
+    for entity_type, items in by_type.items():
+        if len(items) > MAX_ENTITIES_PER_TYPE_BEFORE_SUMMARIZING:
+            collapsed.append({"type": entity_type, "value": _repeated_entity_summary(len(items))})
+        else:
+            collapsed.extend(items)
+
+    # Per-type collapsing may still leave more distinct types than the
+    # overall cap allows (many different single-occurrence types) -
+    # truncate deterministically rather than let the list keep growing.
+    return collapsed[:MAX_EXTRACTED_ENTITIES]
+
+
 # Entities whose value must appear character-for-character in the source
 # text. No normalization is applied - a single dropped, added, reordered, or
 # separator-inserted digit fails verification and the entity is dropped.
@@ -69,4 +134,4 @@ def validate_extracted_entities(
 
         validated.append(entity)
 
-    return validated
+    return _collapse_and_cap_entities(validated)
