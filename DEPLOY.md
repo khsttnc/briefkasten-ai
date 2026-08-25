@@ -181,72 +181,54 @@ tamamladıktan sonra **mutlaka** en alttaki "Restore" prosedürünü bir kez
 gerçekten çalıştırıp doğrula.
 
 Yedekleme günlük olarak SQLite veritabanının WAL-güvenli online kopyasını
-ve `uploads/` klasörünü alır, [Restic](https://restic.net/) ile
-**sunucudan ayrı** bir hedefe (Hetzner Storage Box, SFTP üzerinden) şifreli
-ve rotasyonlu şekilde gönderir. Restic client-side (istemci tarafında)
-şifreliyor - depolama sağlayıcısı (Hetzner) yedek içeriğini asla düz
-göremiyor.
+ve `uploads/` klasörünü alır, [Restic](https://restic.net/) ile bir
+repository'ye şifreli ve rotasyonlu şekilde gönderir. Restic client-side
+(istemci tarafında) şifreliyor - repository'yi nerede tutarsan tut,
+içeriği asla düz görünmez.
 
-### 9.1 Hetzner Storage Box
+**⚠️ ÖNEMLİ - yerel yedek neyi korur, neyi korumaz:** Aşağıdaki 9.1-9.3
+adımları sadece bu sunucunun kendi diskinde (`/var/backups/briefkasten-restic`)
+bir repository kurar. Bu, **yanlışlıkla dosya silme veya uygulama
+seviyesinde bozulmaya karşı** koruma sağlar (ör. `docker compose down -v`
+çalıştırmak, bir migration'ın veriyi bozması). Ama yedek asıl veriyle
+**aynı diskte/sunucuda** olduğu için, **disk arızasına veya sunucunun
+tamamen kaybına karşı hiçbir koruma sağlamaz** - disk giderse ikisi de
+birden gider. **İlk gerçek kullanıcıdan önce**, 9.4'teki opsiyonel uzak
+hedef (Hetzner Storage Box veya benzeri) mutlaka kurulmalı. Bu proje henüz
+gerçek kullanıcı verisi barındırmadığı için uzak hedef şimdilik bilinçli
+olarak ertelendi (bkz. TODO.md).
 
-Hetzner Cloud Console'dan ayrı olarak bir **Storage Box** satın al (küçük
-bir paket yeterli - yedekler restic'in deduplication'ı sayesinde küçük
-kalır). Storage Box'ın SFTP kullanıcı adını ve host adını not al (Hetzner
-Robot panelinden görünür, örn. `u123456@u123456.your-storagebox.de`).
-
-### 9.2 Araçları kur, SSH anahtarını ayarla
+### 9.1 Araçları kur
 
 ```bash
 apt install -y restic sqlite3
+mkdir -p /var/backups/briefkasten-restic
 ```
 
-Storage Box'a şifresiz (anahtar tabanlı) SFTP erişimi için:
+### 9.2 Yerel repository parolası
 
 ```bash
-ssh-keygen -t ed25519 -f /root/.ssh/storagebox -N ""
-cat /root/.ssh/storagebox.pub
+openssl rand -base64 32 > /root/.restic-password-local
+chmod 600 /root/.restic-password-local
 ```
 
-Çıkan public key'i Hetzner Robot panelinde Storage Box'ın "SSH-Keys"
-bölümüne ekle, sonra bağlantıyı doğrula:
-
-```bash
-ssh -i /root/.ssh/storagebox -p 23 u123456@u123456.your-storagebox.de
-```
-
-(`-p 23` Hetzner Storage Box'ın SFTP/SSH portu - normal 22 değil.)
-
-### 9.3 Restic parolası ve repository ayarları
-
-```bash
-openssl rand -base64 32 > /root/.restic-password
-chmod 600 /root/.restic-password
-```
-
-**Bu parolayı KAYBEDERSEN tüm yedekler kalıcı olarak kurtarılamaz hale
-gelir** (Restic'te "arka kapı" yok). `/root/.restic-password`'ün bir
-kopyasını sunucu dışında (ör. bir şifre yöneticisinde) da sakla.
+**Bu parolayı KAYBEDERSEN yerel yedekler kalıcı olarak kurtarılamaz hale
+gelir** (Restic'te "arka kapı" yok). Bir kopyasını sunucu dışında (ör. bir
+şifre yöneticisinde) da sakla - aksi halde "yerel yedek" + "kaybolan
+parola" = hiç yedek yok demek.
 
 ```bash
 cat > /root/.restic-env <<'EOF'
-export RESTIC_REPOSITORY="sftp://u123456@u123456.your-storagebox.de:23//home/briefkasten-backup"
-export RESTIC_PASSWORD_FILE="/root/.restic-password"
-export RESTIC_SFTP_COMMAND="ssh -i /root/.ssh/storagebox -p 23 u123456@u123456.your-storagebox.de -s sftp"
+export RESTIC_LOCAL_REPOSITORY="/var/backups/briefkasten-restic"
+export RESTIC_LOCAL_PASSWORD_FILE="/root/.restic-password-local"
 EOF
 chmod 600 /root/.restic-env
 ```
 
-(`u123456`, host adı ve hedef path'i kendi Storage Box bilgilerinle
-değiştir.)
+Repository'i script ilk çalıştığında otomatik başlatıyor (`backup.sh`
+içindeki `_restic_ensure_initialized`), elle `restic init` gerekmiyor.
 
-Repository'i bir kez başlat:
-
-```bash
-source /root/.restic-env
-restic init
-```
-
-### 9.4 Script'i çalıştırılabilir yap ve cron'a ekle
+### 9.3 Script'i çalıştırılabilir yap ve cron'a ekle
 
 ```bash
 chmod +x /opt/briefkasten-ai/backend/scripts/backup.sh
@@ -263,7 +245,81 @@ Elle bir kez deneyerek doğrula:
 
 ```bash
 /opt/briefkasten-ai/backend/scripts/backup.sh
-source /root/.restic-env && restic snapshots
+source /root/.restic-env
+RESTIC_REPOSITORY="$RESTIC_LOCAL_REPOSITORY" RESTIC_PASSWORD_FILE="$RESTIC_LOCAL_PASSWORD_FILE" restic snapshots
+```
+
+Uzak hedef henüz kurulmadığı için çıktıda şu uyarı görünmeli - bu normal,
+hata değil:
+
+```
+WARNING: no remote backup target configured (/root/.restic-env-remote not found).
+WARNING: backups exist ONLY on this server and do NOT survive disk/server loss.
+WARNING: set up an off-server target before real user data exists - see DEPLOY.md 'Yedekleme'.
+```
+
+### 9.4 Uzak hedef ekleme (Storage Box) - ilk gerçek kullanıcıdan ÖNCE yapılmalı
+
+Bir Hetzner Storage Box satın alınca (SFTP kullanıcı adı/host Hetzner
+Robot panelinde görünür), `backup.sh` kodunda hiçbir değişiklik
+gerekmiyor - sadece aşağıdaki dosyayı oluşturmak yeterli, script bir
+sonraki çalışmasında otomatik olarak hem yerel hem uzak yedek almaya
+başlar:
+
+```bash
+ssh-keygen -t ed25519 -f /root/.ssh/storagebox -N ""
+cat /root/.ssh/storagebox.pub
+# Çıkan public key'i Hetzner Robot panelinde Storage Box'ın
+# "SSH-Keys" bölümüne ekle, sonra doğrula:
+ssh -i /root/.ssh/storagebox -p 23 u123456@u123456.your-storagebox.de
+
+openssl rand -base64 32 > /root/.restic-password-remote
+chmod 600 /root/.restic-password-remote
+
+cat > /root/.restic-env-remote <<'EOF'
+export RESTIC_REMOTE_REPOSITORY="sftp://u123456@u123456.your-storagebox.de:23//home/briefkasten-backup"
+export RESTIC_REMOTE_PASSWORD_FILE="/root/.restic-password-remote"
+export RESTIC_SFTP_COMMAND="ssh -i /root/.ssh/storagebox -p 23 u123456@u123456.your-storagebox.de -s sftp"
+EOF
+chmod 600 /root/.restic-env-remote
+```
+
+(`u123456`, host adı ve hedef path'i kendi Storage Box bilgilerinle
+değiştir.) Elle bir kez çalıştırıp doğrula:
+
+```bash
+/opt/briefkasten-ai/backend/scripts/backup.sh
+source /root/.restic-env-remote
+RESTIC_REPOSITORY="$RESTIC_REMOTE_REPOSITORY" RESTIC_PASSWORD_FILE="$RESTIC_REMOTE_PASSWORD_FILE" restic snapshots
+```
+
+Bu sefer "no remote backup target configured" uyarısı **görünmemeli** ve
+"Remote backup completed" satırı çıkmalı.
+
+### 9.5 Yedeği kendi bilgisayarına indirme
+
+Yerel repository tek bir dizin (`/var/backups/briefkasten-restic`) - şifreli
+olduğu için parolasız hiçbir işe yaramaz, dolayısıyla olduğu gibi kendi
+bilgisayarına kopyalamak güvenlidir. `rsync` (kesintiye dayanıklı, sadece
+değişeni indirir) önerilir:
+
+```bash
+rsync -avz -e ssh root@46.225.50.238:/var/backups/briefkasten-restic/ ./briefkasten-backup/
+```
+
+`scp` ile tam kopya (daha basit, ama her seferinde her şeyi yeniden indirir):
+
+```bash
+scp -r root@46.225.50.238:/var/backups/briefkasten-restic ./briefkasten-backup
+```
+
+İndirdikten sonra kendi bilgisayarında da açabilirsin (restic parolan
+lazım):
+
+```bash
+export RESTIC_REPOSITORY=./briefkasten-backup
+export RESTIC_PASSWORD_FILE=/path/to/restic-password-local  # sunucudan ayrı güvenli bir yerden al
+restic snapshots
 ```
 
 ## Loglar / sorun giderme
@@ -333,14 +389,30 @@ down -v`) kullanılan felaket kurtarma prosedürüdür. **Geri yükleme mevcut
 canlı veriyi kalıcı olarak üzerine yazar** - sadece gerçekten gerektiğinde
 çalıştır.
 
+**Hangi repository'den restore edileceğine dikkat et:** disk arızası veya
+sunucunun tamamen kaybı gibi bir senaryoda yerel repository de veriyle
+birlikte gitmiş olur - o durumda tek seçenek uzak (remote) repository'dir
+(kurulmuşsa). Yanlışlıkla silme gibi sunucunun kendisi sağlam kaldığı
+durumlarda yerel repository yeterlidir.
+
 ```bash
 # 1. Uygulamayı durdur - restore sırasında hem eski hem yeni veriye aynı
 #    anda yazılmasını önlemek için.
 cd /opt/briefkasten-ai
 docker compose down
 
-# 2. Hangi snapshot'ın geri yükleneceğini belirle.
+# 2. Hangi repository'den restore edeceğine karar ver, RESTIC_REPOSITORY
+#    ve RESTIC_PASSWORD_FILE'ı ona göre ayarla. Yerel için:
 source /root/.restic-env
+export RESTIC_REPOSITORY="$RESTIC_LOCAL_REPOSITORY"
+export RESTIC_PASSWORD_FILE="$RESTIC_LOCAL_PASSWORD_FILE"
+# ...ya da uzak için (sunucu/disk kaybı senaryosu - yeni bir sunucuda
+# /root/.restic-env-remote'u elle yeniden oluşturup onu kullan):
+#   source /root/.restic-env-remote
+#   export RESTIC_REPOSITORY="$RESTIC_REMOTE_REPOSITORY"
+#   export RESTIC_PASSWORD_FILE="$RESTIC_REMOTE_PASSWORD_FILE"
+
+# Hangi snapshot'ın geri yükleneceğini belirle.
 restic snapshots
 
 # 3. Seçilen snapshot'ı geçici bir klasöre geri yükle (doğrudan volume'un
