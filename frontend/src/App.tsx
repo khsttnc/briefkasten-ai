@@ -24,6 +24,11 @@ import AuthGate from './auth/AuthGate';
 
 const TOOL_SECTION_ID = 'analiz-araci';
 
+// Above this, AI analysis is noticeably slower (measured against the live
+// NVIDIA API: ~2-5s for a short letter vs. ~8-16s for a real 500,000-char
+// document) - worth telling the user up front instead of a bare spinner.
+const LONG_DOCUMENT_CHAR_THRESHOLD = 50_000;
+
 interface AppError {
   message: string;
 }
@@ -255,10 +260,16 @@ function AppHome() {
     }
 
     setAIError(null);
+    // Long documents genuinely take longer (a real 500,000-character
+    // document measured ~8-16s vs. ~2-5s for a short letter) - say so up
+    // front rather than leaving the user staring at a spinner with no
+    // sense of whether it's still working.
+    const isLongDocument = (analysisResult?.characters ?? 0) > LONG_DOCUMENT_CHAR_THRESHOLD;
+    const actionLabel = force ? 'Belge yeniden analiz ediliyor' : 'AI analizi başlatılıyor';
     setAIStatusMessage(
-      force
-        ? 'Belge yeniden analiz ediliyor, bu biraz zaman alabilir...'
-        : 'AI analizi başlatılıyor, bu biraz zaman alabilir...'
+      isLongDocument
+        ? `${actionLabel}. Bu belge uzun olduğu için analiz biraz sürebilir (15-20 saniyeye kadar), lütfen bekleyin...`
+        : `${actionLabel}, bu biraz zaman alabilir...`
     );
     setAILoading(true);
 

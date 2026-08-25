@@ -232,7 +232,7 @@ class DuplicateAIAnalysisPreventionTestCase(unittest.TestCase):
         # document_processing.py's own truncation logic is unit-tested
         # separately in test_processing.py.
         document = self._upload_and_extract()
-        document.character_count = 500_000
+        document.character_count = 600_000
         self.db.add(document)
         self.db.commit()
 
@@ -259,7 +259,7 @@ class DuplicateAIAnalysisPreventionTestCase(unittest.TestCase):
         self.assertEqual(refreshed.deadline_certainty, "estimated")
         self.assertIn("çok uzun", refreshed.action_summary)
         self.assertTrue(result["text_truncated"])
-        self.assertEqual(result["original_character_count"], 500_000)
+        self.assertEqual(result["original_character_count"], 600_000)
 
     def test_cached_result_preserves_all_fields(self):
         document = self._upload_and_extract()

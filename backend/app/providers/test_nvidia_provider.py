@@ -22,6 +22,19 @@ class DummyResponse:
         return False
 
 
+def _openai_style_response(content: str, finish_reason: str = "stop") -> str:
+    return json.dumps(
+        {
+            "choices": [
+                {
+                    "finish_reason": finish_reason,
+                    "message": {"content": content},
+                }
+            ]
+        }
+    )
+
+
 class TestNvidiaProvider(unittest.TestCase):
     def test_build_prompt_contains_expected_fields(self):
         prompt = _build_nvidia_prompt("Das ist ein Testdokument.")
@@ -120,6 +133,74 @@ class TestNvidiaProvider(unittest.TestCase):
 
         self.assertIsNotNone(result.error_message)
         self.assertIn("connect", result.error_message.lower())
+
+    @patch.dict("os.environ", {"NVIDIA_API_KEY": "test-key"})
+    @patch("backend.app.providers.nvidia_provider.urllib.request.urlopen")
+    def test_finish_reason_length_is_a_hard_failure_not_a_partial_parse(self, mock_urlopen):
+        # Regression test for a real finding: a 2,000,000-character test
+        # document drove completion_tokens to exactly the max_tokens cap in
+        # a live API call - the response was cut off, not finished. Even if
+        # the truncated content happens to still parse as valid JSON (its
+        # braces/strings could coincidentally close right where generation
+        # was cut), it must never be used - fail closed on finish_reason
+        # alone, before any attempt to read raw_text.
+        complete_but_flagged_as_cut = json.dumps({"document_type": "Bescheid"})
+        mock_urlopen.return_value = DummyResponse(
+            _openai_style_response(complete_but_flagged_as_cut, finish_reason="length")
+        )
+
+        provider = NvidiaProvider()
+        result = provider.analyze_document("Test text")
+
+        self.assertIsNotNone(result.error_message)
+        self.assertIn("cut off", result.error_message)
+        self.assertIsNone(result.document_type)
+
+    @patch.dict("os.environ", {"NVIDIA_API_KEY": "test-key"})
+    @patch("backend.app.providers.nvidia_provider.urllib.request.urlopen")
+    def test_finish_reason_length_with_genuinely_truncated_json_is_also_a_hard_failure(
+        self, mock_urlopen
+    ):
+        truncated_json = '{"document_type": "Bescheid", "summary": "unvoll'
+        mock_urlopen.return_value = DummyResponse(
+            _openai_style_response(truncated_json, finish_reason="length")
+        )
+
+        provider = NvidiaProvider()
+        result = provider.analyze_document("Test text")
+
+        self.assertIsNotNone(result.error_message)
+        self.assertIn("cut off", result.error_message)
+
+    @patch.dict("os.environ", {"NVIDIA_API_KEY": "test-key"})
+    @patch("backend.app.providers.nvidia_provider.urllib.request.urlopen")
+    def test_finish_reason_stop_with_valid_json_succeeds(self, mock_urlopen):
+        content = json.dumps({"document_type": "Bescheid"})
+        mock_urlopen.return_value = DummyResponse(
+            _openai_style_response(content, finish_reason="stop")
+        )
+
+        provider = NvidiaProvider()
+        result = provider.analyze_document("Test text")
+
+        self.assertIsNone(result.error_message)
+        self.assertEqual(result.document_type, "Bescheid")
+
+    @patch.dict("os.environ", {"NVIDIA_API_KEY": "test-key"})
+    @patch("backend.app.providers.nvidia_provider.urllib.request.urlopen")
+    def test_request_sends_max_tokens_with_real_measured_safety_margin(self, mock_urlopen):
+        content = json.dumps({"document_type": "Bescheid"})
+        mock_urlopen.return_value = DummyResponse(_openai_style_response(content))
+
+        provider = NvidiaProvider()
+        provider.analyze_document("Test text")
+
+        sent_request = mock_urlopen.call_args[0][0]
+        sent_body = json.loads(sent_request.data.decode("utf-8"))
+        # A real test call against the live API with a realistic
+        # 500,000-character document used ~570-585 completion tokens - this
+        # must stay comfortably above that, not just above the old value.
+        self.assertGreaterEqual(sent_body["max_tokens"], 2000)
 
 
 if __name__ == "__main__":

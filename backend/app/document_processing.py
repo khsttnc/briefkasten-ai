@@ -3,23 +3,29 @@ from typing import Optional
 from .ai_service import AIAnalysisResult, AIService
 
 # A document's extracted text beyond this length is not sent to the AI
-# provider as-is. This pipeline's taxonomy (Bescheid/Mahnung/Kündigung/...)
-# targets short official letters - the personalized signal it looks for
-# (sender, dates, an actionable deadline) is almost always in the first few
-# pages (the actual cover letter) or a short closing section, never buried
-# in hundreds of pages of boilerplate terms (e.g. a 200-page insurance
-# policy's Versicherungsbedingungen). Sending all of it is expensive and
-# does not improve extraction quality. A single named constant so the
-# budget is easy to retune later.
-MAX_ANALYSIS_TEXT_CHARS = 20_000
+# provider as-is. Real, measured ceiling (not a guess - see
+# scratchpad test_nvidia_context.py run against the live NVIDIA API):
+# nvidia/nemotron-3-nano-30b-a3b's actual max context is 1,000,000 tokens
+# (confirmed by the API's own rejection message at ~1.003M tokens), which
+# for German text is roughly 4 chars/token - a real 206,540-character
+# document (the incident that originally motivated truncation) only used
+# 54,317 of those tokens (5.4%). This constant is deliberately set far
+# below the true ~3.9M-char ceiling: at 2,000,000 chars a real test call
+# took 52.6s and the model's completion hit its max_tokens cap outright
+# (a truncated-response risk in its own right, independent of context
+# size) - 500k chars keeps well clear of both the latency growth and that
+# risk while comfortably covering every realistic use case, including a
+# ~200-page contract or insurance policy. A single named constant so the
+# budget is easy to retune later if real usage patterns demand it.
+MAX_ANALYSIS_TEXT_CHARS = 500_000
 
 # How MAX_ANALYSIS_TEXT_CHARS is split between the start and end of the
 # document when it must be truncated. Weighted toward the head (cover
 # letter, sender, key dates); a smaller tail share is kept in case a
 # signature or closing notice carries something relevant instead. Must sum
 # to MAX_ANALYSIS_TEXT_CHARS.
-TRUNCATION_HEAD_CHARS = 14_000
-TRUNCATION_TAIL_CHARS = 6_000
+TRUNCATION_HEAD_CHARS = 350_000
+TRUNCATION_TAIL_CHARS = 150_000
 
 assert TRUNCATION_HEAD_CHARS + TRUNCATION_TAIL_CHARS == MAX_ANALYSIS_TEXT_CHARS
 

@@ -21,7 +21,19 @@ from ..config import (
 # exactly how the prompt and derive_intelligence_fields() drift out of sync.
 from .ollama_provider import _build_ollama_prompt as _build_nvidia_prompt
 
-DEFAULT_MAX_TOKENS = 2000
+# Measured, not guessed: a real test call against the live API with a
+# realistic, information-dense 500,000-character document (the new
+# MAX_ANALYSIS_TEXT_CHARS ceiling in document_processing.py - see that
+# file's comment for the full context-limit investigation) used only
+# ~570-585 completion tokens for the complete JSON response. 4000 keeps
+# roughly 7x headroom over that measurement. The previous value (2000) was
+# not clearly safe: a real test at 2,000,000 input characters (since
+# reduced to well below the new ceiling) drove completion_tokens to
+# exactly 2000 - i.e. the response was cut off by the cap, not because it
+# was actually finished. See the finish_reason == "length" check in
+# _send_request below, which now treats that condition as a hard failure
+# instead of silently trying to parse a truncated JSON response.
+DEFAULT_MAX_TOKENS = 4000
 DEFAULT_TEMPERATURE = 0.2
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 120
 # A frequency_penalty (tried as a mitigation, mirroring Ollama's
@@ -148,15 +160,33 @@ class NvidiaProvider(BaseAIProvider):
             )
 
         raw_text = ""
+        finish_reason = None
         choices = parsed_response.get("choices")
         if isinstance(choices, list) and choices:
             first_choice = choices[0]
             if isinstance(first_choice, dict):
+                finish_reason = first_choice.get("finish_reason")
                 message = first_choice.get("message")
                 if isinstance(message, dict):
                     content = message.get("content")
                     if isinstance(content, str):
                         raw_text = content
+
+        # Fail closed on a response cut off by the token limit: an
+        # incomplete JSON object may fail to parse (already handled below)
+        # but could also, by coincidence, close its braces/strings exactly
+        # where generation was cut and parse as valid-but-incomplete JSON -
+        # silently accepting that would mean acting on content the model
+        # never actually finished producing. Checked before any attempt to
+        # use raw_text, regardless of whether it happens to parse.
+        if finish_reason == "length":
+            return AIAnalysisResult(
+                error_message=(
+                    "NVIDIA response was cut off before completing (hit the "
+                    "token limit) - the analysis is incomplete and was not used."
+                ),
+                raw_response=parsed_response,
+            )
 
         if not raw_text:
             return AIAnalysisResult(
