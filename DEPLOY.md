@@ -117,7 +117,8 @@ nano .env           # sadece VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY'i gir
 Doldurman gerekenler (bkz. dosyadaki açıklamalar):
 
 - `NVIDIA_API_KEY` (AI_PROVIDER=nvidia zaten örnek dosyada varsayılan)
-- `SUPABASE_JWT_SECRET`
+- `SUPABASE_URL` (backend/.env'de - JWKS doğrulaması için proje URL'i,
+  paylaşılan bir secret değil)
 - `STRIPE_WEBHOOK_SECRET` (webhook kullanılıyorsa)
 - `FRONTEND_ORIGIN` zaten `https://briefkastenai.de` olarak dolu, dokunma
 - `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` (Supabase Dashboard ->
@@ -182,8 +183,8 @@ docker compose logs -f caddy
 ```
 
 Backend ayağa kalkmıyorsa çoğunlukla `backend/.env` içinde eksik/yanlış
-bir değer vardır (özellikle `NVIDIA_API_KEY` veya
-`SUPABASE_JWT_SECRET`) — logda hata mesajı görünür.
+bir değer vardır (özellikle `NVIDIA_API_KEY` veya `SUPABASE_URL`) — logda
+hata mesajı görünür.
 
 ## Güncelleme / yeniden deploy
 

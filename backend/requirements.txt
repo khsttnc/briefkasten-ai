@@ -21,4 +21,5 @@ Pillow
 python-dotenv==1.1.1
 alembic==1.19.1
 PyJWT==2.13.0
+cryptography==50.0.0
 stripe==15.5.1

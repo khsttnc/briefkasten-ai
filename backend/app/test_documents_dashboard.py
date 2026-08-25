@@ -8,11 +8,10 @@ backend/uploads/ are never touched.
 import shutil
 import tempfile
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
-import jwt
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -20,22 +19,10 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from . import services
-from .auth import JWT_ALGORITHM, JWT_AUDIENCE
 from .database import get_db
+from .jwt_test_support import generate_keypair, make_token, patch_jwks
 from .main import app
 from .models import Base, Document, User
-
-TEST_SECRET = "test-supabase-jwt-secret"
-
-
-def _make_token(sub: str, secret: str = TEST_SECRET) -> str:
-    payload = {
-        "sub": sub,
-        "email": f"{sub}@example.com",
-        "aud": JWT_AUDIENCE,
-        "exp": datetime.now(timezone.utc) + timedelta(hours=1),
-    }
-    return jwt.encode(payload, secret, algorithm=JWT_ALGORITHM)
 
 
 def _make_document(db, owner_id: int, **overrides) -> Document:
@@ -244,8 +231,8 @@ class DocumentsRouteTestCase(unittest.TestCase):
                 db.close()
 
         app.dependency_overrides[get_db] = override_get_db
-        self.env_patcher = patch.dict("os.environ", {"SUPABASE_JWT_SECRET": TEST_SECRET})
-        self.env_patcher.start()
+        self.private_key, self.jwks = generate_keypair()
+        patch_jwks(self, self.jwks)
         self.client = TestClient(app)
 
         db = self.SessionLocal()
@@ -257,11 +244,10 @@ class DocumentsRouteTestCase(unittest.TestCase):
         _make_document(db, self.owner.id, filename="low.pdf", priority_level="low")
         db.close()
 
-        self.token = _make_token(sub="user-a")
+        self.token = make_token(sub="user-a", private_key=self.private_key)
 
     def tearDown(self):
         app.dependency_overrides.pop(get_db, None)
-        self.env_patcher.stop()
         self.upload_root_patcher.stop()
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
 

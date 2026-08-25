@@ -5,24 +5,41 @@ from typing import Optional
 
 import jwt
 from fastapi import Depends, Header, HTTPException
+from jwt import PyJWKClient
+from jwt.exceptions import PyJWKClientConnectionError, PyJWKClientError
 from sqlalchemy.orm import Session
 
-from .config import SUPABASE_JWT_SECRET_ENV
+from .config import SUPABASE_URL_ENV
 from .database import get_db
 from .models import User
 
-JWT_ALGORITHM = "HS256"
+JWT_ALGORITHM = "ES256"
 JWT_AUDIENCE = "authenticated"
 
+# Keyed by SUPABASE_URL rather than a single bare singleton: each distinct
+# URL gets its own PyJWKClient, and each client keeps its own 5-minute JWKS
+# cache internally (PyJWKClient's cache_jwk_set), so this dict is what makes
+# that cache survive across requests instead of being rebuilt (and refetched)
+# on every call. On a key rotation, PyJWKClient.get_signing_key already
+# refetches once and retries when the token's kid isn't in the cached set,
+# so rotation is handled without any extra code here.
+_jwks_clients: dict[str, PyJWKClient] = {}
 
-def _get_supabase_jwt_secret() -> str:
-    secret = os.getenv(SUPABASE_JWT_SECRET_ENV)
-    if not secret:
+
+def _get_jwks_client() -> PyJWKClient:
+    supabase_url = os.getenv(SUPABASE_URL_ENV)
+    if not supabase_url:
         raise HTTPException(
             status_code=503,
             detail="Authentication is not configured on this server.",
         )
-    return secret
+
+    client = _jwks_clients.get(supabase_url)
+    if client is None:
+        jwks_uri = f"{supabase_url.rstrip('/')}/auth/v1/.well-known/jwks.json"
+        client = PyJWKClient(jwks_uri, cache_jwk_set=True, lifespan=300)
+        _jwks_clients[supabase_url] = client
+    return client
 
 
 def get_current_user(
@@ -32,6 +49,11 @@ def get_current_user(
     """Verifies the Supabase Auth JWT on the request and resolves it to an
     internal User row, matched by the token's "sub" claim.
 
+    Tokens are ES256-signed with Supabase's asymmetric project key; the
+    verifying public key is fetched (and cached) from Supabase's JWKS
+    endpoint - see _get_jwks_client - rather than configured as a shared
+    secret.
+
     Ownership/authorization decisions never trust anything from the request
     body or query params - only this dependency's return value (see
     services.py, which takes owner_id from here, never from the client)."""
@@ -39,10 +61,22 @@ def get_current_user(
         raise HTTPException(status_code=401, detail="Missing bearer token.")
 
     token = authorization.removeprefix("Bearer ").strip()
-    secret = _get_supabase_jwt_secret()
+    jwks_client = _get_jwks_client()
 
     try:
-        payload = jwt.decode(token, secret, algorithms=[JWT_ALGORITHM], audience=JWT_AUDIENCE)
+        signing_key = jwks_client.get_signing_key_from_jwt(token)
+    except PyJWKClientConnectionError:
+        raise HTTPException(
+            status_code=503,
+            detail="Authentication service is temporarily unavailable.",
+        )
+    except (PyJWKClientError, jwt.InvalidTokenError):
+        raise HTTPException(status_code=401, detail="Invalid token.")
+
+    try:
+        payload = jwt.decode(
+            token, signing_key.key, algorithms=[JWT_ALGORITHM], audience=JWT_AUDIENCE
+        )
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired.")
     except jwt.InvalidTokenError:

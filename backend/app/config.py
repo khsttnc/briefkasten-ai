@@ -49,11 +49,13 @@ NVIDIA_BASE_URL_ENV = "NVIDIA_BASE_URL"
 DEFAULT_NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
 DEFAULT_NVIDIA_MODEL = "nvidia/nemotron-3-nano-30b-a3b"
 
-# Supabase Auth issues user JWTs signed with this project-level secret
-# (Supabase Dashboard -> Settings -> API -> JWT Secret). No default: a
-# missing secret must fail loudly (auth.py returns 503), never silently
-# accept an unverifiable token.
-SUPABASE_JWT_SECRET_ENV = "SUPABASE_JWT_SECRET"
+# Supabase Auth issues user JWTs signed with the project's asymmetric
+# (ES256/P-256) signing key. auth.py verifies them against the public key
+# published at this project's JWKS endpoint
+# (<SUPABASE_URL>/auth/v1/.well-known/jwks.json) - never a shared secret.
+# No default: a missing URL must fail loudly (auth.py returns 503), never
+# silently accept an unverifiable token.
+SUPABASE_URL_ENV = "SUPABASE_URL"
 
 # CORS: the single real frontend origin allowed to call this API with
 # credentials/Authorization headers - never "*" once auth is involved.

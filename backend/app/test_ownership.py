@@ -15,12 +15,11 @@ import io
 import shutil
 import tempfile
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from pathlib import Path
 from unittest.mock import patch
 
 import fitz
-import jwt
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -28,12 +27,10 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from . import services
-from .auth import JWT_ALGORITHM, JWT_AUDIENCE
 from .database import get_db
+from .jwt_test_support import generate_keypair, make_token, patch_jwks
 from .main import app
 from .models import Base, Document, User
-
-TEST_SECRET = "test-supabase-jwt-secret"
 
 
 class FakeUploadFile:
@@ -49,16 +46,6 @@ def _build_sample_pdf_bytes(text: str) -> bytes:
     pdf_bytes = doc.tobytes()
     doc.close()
     return pdf_bytes
-
-
-def _make_token(sub: str, secret: str = TEST_SECRET, expires_delta: timedelta = timedelta(hours=1)) -> str:
-    payload = {
-        "sub": sub,
-        "email": f"{sub}@example.com",
-        "aud": JWT_AUDIENCE,
-        "exp": datetime.now(timezone.utc) + expires_delta,
-    }
-    return jwt.encode(payload, secret, algorithm=JWT_ALGORITHM)
 
 
 class OwnershipServiceLayerTestCase(unittest.TestCase):
@@ -203,13 +190,12 @@ class AuthRouteTestCase(unittest.TestCase):
                 db.close()
 
         app.dependency_overrides[get_db] = override_get_db
-        self.env_patcher = patch.dict("os.environ", {"SUPABASE_JWT_SECRET": TEST_SECRET})
-        self.env_patcher.start()
+        self.private_key, self.jwks = generate_keypair()
+        patch_jwks(self, self.jwks)
         self.client = TestClient(app)
 
     def tearDown(self):
         app.dependency_overrides.pop(get_db, None)
-        self.env_patcher.stop()
         self.upload_root_patcher.stop()
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
@@ -231,17 +217,18 @@ class AuthRouteTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
 
     def test_upload_with_wrong_signature_is_401(self):
-        bad_token = _make_token(sub="user-a", secret="wrong-secret")
+        wrong_private_key, _ = generate_keypair()
+        bad_token = make_token(sub="user-a", private_key=wrong_private_key)
         response = self._upload(bad_token, "A.pdf", "wrong sig")
         self.assertEqual(response.status_code, 401)
 
     def test_upload_with_expired_token_is_401(self):
-        expired_token = _make_token(sub="user-a", expires_delta=timedelta(hours=-1))
+        expired_token = make_token(sub="user-a", private_key=self.private_key, expires_delta=timedelta(hours=-1))
         response = self._upload(expired_token, "A.pdf", "expired")
         self.assertEqual(response.status_code, 401)
 
     def test_valid_token_full_upload_and_analyze_flow_succeeds(self):
-        token = _make_token(sub="user-a")
+        token = make_token(sub="user-a", private_key=self.private_key)
         upload_response = self._upload(token, "A.pdf", "Rechnung Nr. 42")
         self.assertEqual(upload_response.status_code, 200)
         document_id = upload_response.json()["id"]
@@ -253,8 +240,8 @@ class AuthRouteTestCase(unittest.TestCase):
         self.assertIn("Rechnung", analyze_response.json()["text"])
 
     def test_cross_user_document_access_is_404(self):
-        token_a = _make_token(sub="user-a")
-        token_b = _make_token(sub="user-b")
+        token_a = make_token(sub="user-a", private_key=self.private_key)
+        token_b = make_token(sub="user-b", private_key=self.private_key)
 
         upload_response = self._upload(token_a, "A.pdf", "User A's private letter")
         document_id = upload_response.json()["id"]
@@ -265,7 +252,7 @@ class AuthRouteTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
 
     def test_first_request_for_a_new_sub_provisions_a_user_row(self):
-        token = _make_token(sub="brand-new-user")
+        token = make_token(sub="brand-new-user", private_key=self.private_key)
         response = self._upload(token, "New.pdf", "first ever request")
         self.assertEqual(response.status_code, 200)
 
