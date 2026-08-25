@@ -174,6 +174,98 @@ Caddy ilk istekte Let's Encrypt sertifikasını otomatik alır — `curl`
 komutları birkaç saniye gecikebilir, `docker compose logs caddy` ile
 sertifika alım sürecini izleyebilirsin.
 
+## 9. Yedekleme (Backup) kurulumu
+
+Test edilmemiş bir yedek, yedek değildir - bu yüzden bu bölümdeki kurulumu
+tamamladıktan sonra **mutlaka** en alttaki "Restore" prosedürünü bir kez
+gerçekten çalıştırıp doğrula.
+
+Yedekleme günlük olarak SQLite veritabanının WAL-güvenli online kopyasını
+ve `uploads/` klasörünü alır, [Restic](https://restic.net/) ile
+**sunucudan ayrı** bir hedefe (Hetzner Storage Box, SFTP üzerinden) şifreli
+ve rotasyonlu şekilde gönderir. Restic client-side (istemci tarafında)
+şifreliyor - depolama sağlayıcısı (Hetzner) yedek içeriğini asla düz
+göremiyor.
+
+### 9.1 Hetzner Storage Box
+
+Hetzner Cloud Console'dan ayrı olarak bir **Storage Box** satın al (küçük
+bir paket yeterli - yedekler restic'in deduplication'ı sayesinde küçük
+kalır). Storage Box'ın SFTP kullanıcı adını ve host adını not al (Hetzner
+Robot panelinden görünür, örn. `u123456@u123456.your-storagebox.de`).
+
+### 9.2 Araçları kur, SSH anahtarını ayarla
+
+```bash
+apt install -y restic sqlite3
+```
+
+Storage Box'a şifresiz (anahtar tabanlı) SFTP erişimi için:
+
+```bash
+ssh-keygen -t ed25519 -f /root/.ssh/storagebox -N ""
+cat /root/.ssh/storagebox.pub
+```
+
+Çıkan public key'i Hetzner Robot panelinde Storage Box'ın "SSH-Keys"
+bölümüne ekle, sonra bağlantıyı doğrula:
+
+```bash
+ssh -i /root/.ssh/storagebox -p 23 u123456@u123456.your-storagebox.de
+```
+
+(`-p 23` Hetzner Storage Box'ın SFTP/SSH portu - normal 22 değil.)
+
+### 9.3 Restic parolası ve repository ayarları
+
+```bash
+openssl rand -base64 32 > /root/.restic-password
+chmod 600 /root/.restic-password
+```
+
+**Bu parolayı KAYBEDERSEN tüm yedekler kalıcı olarak kurtarılamaz hale
+gelir** (Restic'te "arka kapı" yok). `/root/.restic-password`'ün bir
+kopyasını sunucu dışında (ör. bir şifre yöneticisinde) da sakla.
+
+```bash
+cat > /root/.restic-env <<'EOF'
+export RESTIC_REPOSITORY="sftp://u123456@u123456.your-storagebox.de:23//home/briefkasten-backup"
+export RESTIC_PASSWORD_FILE="/root/.restic-password"
+export RESTIC_SFTP_COMMAND="ssh -i /root/.ssh/storagebox -p 23 u123456@u123456.your-storagebox.de -s sftp"
+EOF
+chmod 600 /root/.restic-env
+```
+
+(`u123456`, host adı ve hedef path'i kendi Storage Box bilgilerinle
+değiştir.)
+
+Repository'i bir kez başlat:
+
+```bash
+source /root/.restic-env
+restic init
+```
+
+### 9.4 Script'i çalıştırılabilir yap ve cron'a ekle
+
+```bash
+chmod +x /opt/briefkasten-ai/backend/scripts/backup.sh
+crontab -e
+```
+
+Aşağıdaki satırı ekle (her gece 03:00'te çalışır, çıktısını loglar):
+
+```
+0 3 * * * /opt/briefkasten-ai/backend/scripts/backup.sh >> /var/log/briefkasten-backup.log 2>&1
+```
+
+Elle bir kez deneyerek doğrula:
+
+```bash
+/opt/briefkasten-ai/backend/scripts/backup.sh
+source /root/.restic-env && restic snapshots
+```
+
 ## Loglar / sorun giderme
 
 ```bash
@@ -232,3 +324,47 @@ Kalıcı bir geri dönüş için en güvenilir yol her zaman `git checkout` +
 `docker compose build`'dır — image tag'leri compose tarafından otomatik
 yönetildiği için elle image seçmek yalnızca en son build hâlâ diskteyken
 işe yarar.
+
+## Restore (yedekten geri yükleme)
+
+Bu, kod geri alma (yukarıdaki rollback) değil - veritabanı/dosya
+**veri kaybı** durumunda (disk arızası, yanlışlıkla silme, `docker compose
+down -v`) kullanılan felaket kurtarma prosedürüdür. **Geri yükleme mevcut
+canlı veriyi kalıcı olarak üzerine yazar** - sadece gerçekten gerektiğinde
+çalıştır.
+
+```bash
+# 1. Uygulamayı durdur - restore sırasında hem eski hem yeni veriye aynı
+#    anda yazılmasını önlemek için.
+cd /opt/briefkasten-ai
+docker compose down
+
+# 2. Hangi snapshot'ın geri yükleneceğini belirle.
+source /root/.restic-env
+restic snapshots
+
+# 3. Seçilen snapshot'ı geçici bir klasöre geri yükle (doğrudan volume'un
+#    üzerine değil - önce içeriği gözden geçirmek için).
+restic restore <snapshot-id> --target /root/briefkasten-restore
+
+# 4. Restore edilen dosyaları gerçek volume konumuna kopyala. Volume'un
+#    host'taki gerçek yolunu bul:
+VOLUME_MOUNTPOINT="$(docker volume inspect -f '{{ .Mountpoint }}' \
+    "$(docker volume ls -q --filter label=com.docker.compose.project=briefkasten-ai --filter label=com.docker.compose.volume=db_data)")"
+
+cp /root/briefkasten-restore/root/briefkasten-backup-staging/briefkasten.db "$VOLUME_MOUNTPOINT/briefkasten.db"
+rm -rf "$VOLUME_MOUNTPOINT/uploads"
+cp -a /root/briefkasten-restore/root/briefkasten-backup-staging/uploads "$VOLUME_MOUNTPOINT/uploads"
+
+# 5. Uygulamayı yeniden başlat ve doğrula.
+docker compose up -d
+curl -i https://briefkastenai.de/api/health
+# Ardından tarayıcıdan giriş yapıp bilinen bir belgenin göründüğünü kontrol et.
+```
+
+**Bu prosedürü şimdi, gerçek bir acil durum olmadan, bir kez baştan sona
+gerçekten çalıştır** - hem doğru çalıştığını kanıtlar hem de bir sonraki
+sefer panik anında değil, sakin kafayla öğrenilmiş olur. Ayrıca periyodik
+olarak (ör. üç ayda bir) tekrar dene; restic/Storage Box tarafında sessizce
+bozulan bir şey olup olmadığını sadece gerçek bir restore denemesi ortaya
+çıkarır.
