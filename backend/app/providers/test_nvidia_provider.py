@@ -109,6 +109,46 @@ class TestNvidiaProvider(unittest.TestCase):
 
     @patch.dict("os.environ", {"NVIDIA_API_KEY": "test-key"})
     @patch("backend.app.providers.nvidia_provider.urllib.request.urlopen")
+    def test_gpt_oss_default_model_gets_reasoning_effort_not_chat_template_kwargs(
+        self, mock_urlopen
+    ):
+        # Regression guard: chat_template_kwargs.thinking is a nemotron-only
+        # NIM chat-template toggle, silently ignored by gpt-oss models (the
+        # current default - see config.DEFAULT_NVIDIA_MODEL) - a real API
+        # call confirmed it has no effect there. gpt-oss's own reasoning
+        # control is the separate reasoning_effort parameter instead.
+        content = json.dumps({"document_type": "letter"})
+        raw_json = json.dumps({"choices": [{"message": {"content": content}}]})
+        mock_urlopen.return_value = DummyResponse(raw_json)
+
+        provider = NvidiaProvider()
+        self.assertIn("gpt-oss", provider.model_name)
+        provider.analyze_document("Test text")
+
+        sent_request = mock_urlopen.call_args[0][0]
+        sent_body = json.loads(sent_request.data)
+        self.assertEqual(sent_body.get("reasoning_effort"), "low")
+        self.assertNotIn("chat_template_kwargs", sent_body)
+
+    @patch.dict(
+        "os.environ", {"NVIDIA_API_KEY": "test-key", "NVIDIA_MODEL": "nvidia/nemotron-3-nano-30b-a3b"}
+    )
+    @patch("backend.app.providers.nvidia_provider.urllib.request.urlopen")
+    def test_nemotron_model_gets_chat_template_kwargs_not_reasoning_effort(self, mock_urlopen):
+        content = json.dumps({"document_type": "letter"})
+        raw_json = json.dumps({"choices": [{"message": {"content": content}}]})
+        mock_urlopen.return_value = DummyResponse(raw_json)
+
+        provider = NvidiaProvider()
+        provider.analyze_document("Test text")
+
+        sent_request = mock_urlopen.call_args[0][0]
+        sent_body = json.loads(sent_request.data)
+        self.assertEqual(sent_body.get("chat_template_kwargs"), {"thinking": False})
+        self.assertNotIn("reasoning_effort", sent_body)
+
+    @patch.dict("os.environ", {"NVIDIA_API_KEY": "test-key"})
+    @patch("backend.app.providers.nvidia_provider.urllib.request.urlopen")
     def test_nvidia_provider_invalid_json(self, mock_urlopen):
         raw_json = json.dumps({"choices": [{"message": {"content": "not json"}}]})
         mock_urlopen.return_value = DummyResponse(raw_json)

@@ -89,10 +89,39 @@ DEFAULT_REQUEST_TIMEOUT_SECONDS = 120
 # answer, which is what a real end-to-end test against this model hit before
 # this flag was added). Document Intelligence extraction is a deterministic
 # formatting task, not a reasoning task, so thinking is disabled outright
-# rather than sized around it. Kept unconditionally for the current default
-# (openai/gpt-oss-120b, also a reasoning model) too - confirmed via a real
-# API call that it's accepted without error there as well.
+# rather than sized around it.
+#
+# Nemotron-specific: this is a NIM chat-template toggle, not a general
+# OpenAI-compatible parameter - initially applied unconditionally to every
+# model on the (false) assumption it would also work for the current
+# default, openai/gpt-oss-120b. It doesn't: gpt-oss models use OpenAI's
+# own "Harmony" response format and the separate `reasoning_effort`
+# parameter (see REASONING_EFFORT_KWARGS below) - `chat_template_kwargs`
+# is silently ignored for them (confirmed: NVIDIA's own docs/forum posts
+# for gpt-oss-120b only document `reasoning_effort`; a real test call
+# sending this kwarg to gpt-oss-120b returned 200 OK with no observable
+# effect on output length or structure). Kept nemotron-only rather than
+# removed outright, in case NVIDIA_MODEL is ever set back to it.
 DISABLE_THINKING_KWARGS = {"chat_template_kwargs": {"thinking": False}}
+
+# gpt-oss models (the current default) expose reasoning depth via this
+# OpenAI-standard parameter instead - "minimal" is not accepted for this
+# model (real test: HTTP 400), so "low" is the lowest working value.
+# Document Intelligence extraction doesn't need deep reasoning, and lower
+# effort measurably reduces reasoning token spend: a real test call with
+# no reasoning_effort set (the previous, accidental default) produced
+# 4747 characters of reasoning_content before ever reaching the JSON
+# answer; the same prompt at reasoning_effort=low produced only 1790.
+# Response content stayed clean, valid JSON in every real call made
+# against this model during this investigation (17 calls total, 0
+# failures, 0 stray Harmony control tokens - e.g. <|return|>, <|channel|> -
+# observed in content) - community reports (NVIDIA forums) describe such
+# leakage as a real, unresolved issue for this model on this API, just
+# not reproduced in this sample. message.get("reasoning_content") is never
+# read below regardless, so even a very long reasoning trace can't affect
+# what this provider acts on - only a leak INTO the content field itself
+# would matter, which is what was tested for and not observed.
+REASONING_EFFORT_KWARGS = {"reasoning_effort": "low"}
 
 
 def _load_json_safe(text: str) -> Optional[Dict[str, Any]]:
@@ -173,16 +202,24 @@ class NvidiaProvider(BaseAIProvider):
         return self._send_request(prompt)
 
     def _send_request(self, prompt: str) -> AIAnalysisResult:
-        request_body = json.dumps(
-            {
-                "model": self._model,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": DEFAULT_MAX_TOKENS,
-                "temperature": DEFAULT_TEMPERATURE,
-                "top_p": DEFAULT_TOP_P,
-                **DISABLE_THINKING_KWARGS,
-            }
-        ).encode("utf-8")
+        payload: Dict[str, Any] = {
+            "model": self._model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": DEFAULT_MAX_TOKENS,
+            "temperature": DEFAULT_TEMPERATURE,
+            "top_p": DEFAULT_TOP_P,
+        }
+        # Model-specific reasoning-control parameter - the two model
+        # families use different, non-interchangeable mechanisms (see the
+        # comments on DISABLE_THINKING_KWARGS/REASONING_EFFORT_KWARGS
+        # above), so only the one that actually matches self._model is
+        # sent rather than both unconditionally.
+        if "nemotron" in self._model:
+            payload.update(DISABLE_THINKING_KWARGS)
+        elif "gpt-oss" in self._model:
+            payload.update(REASONING_EFFORT_KWARGS)
+
+        request_body = json.dumps(payload).encode("utf-8")
 
         url = f"{self._base_url.rstrip('/')}/chat/completions"
         request = urllib.request.Request(
