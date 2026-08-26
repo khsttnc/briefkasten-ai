@@ -105,19 +105,33 @@ function Datenschutz() {
               Absenderkategorie, Prioritätseinstufung) in der Datenbank gespeichert.
             </li>
             <li>
-              <strong>Zahlungs-/Abonnementdaten:</strong> Falls Sie ein kostenpflichtiges
-              Abonnement abschließen, wird die Zahlungsabwicklung über Stripe durchgeführt
-              (siehe Abschnitt 4). In unserer eigenen Datenbank speichern wir dabei keine
-              Zahlungs- bzw. Kartendaten, sondern lediglich technische Verknüpfungsdaten: die
-              von Stripe vergebene Kunden- und Abonnement-ID, den gebuchten Tarif sowie den
-              Abonnementstatus und das Ende der aktuellen Abrechnungsperiode.
+              <strong>Zahlungs-/Abonnementdaten:</strong> Die Anwendung ist technisch für ein
+              kostenpflichtiges Abonnement über Stripe vorbereitet (siehe Abschnitt 4);{' '}
+              <strong>
+                die Zahlungsabwicklung läuft aktuell ausschließlich im Stripe-Testmodus
+              </strong>{' '}
+              - es werden derzeit keine echten Zahlungen entgegengenommen und keine Beträge
+              abgebucht. Sobald ein reales, kostenpflichtiges Abonnement abgeschlossen werden
+              kann, speichern wir in unserer eigenen Datenbank keine Zahlungs- bzw. Kartendaten,
+              sondern lediglich technische Verknüpfungsdaten: die von Stripe vergebene Kunden-
+              und Abonnement-ID, den gebuchten Tarif sowie den Abonnementstatus und das Ende der
+              aktuellen Abrechnungsperiode.
+            </li>
+            <li>
+              <strong>Rate-Limiting-Zähler (Missbrauchsschutz):</strong> Zum Schutz vor
+              automatisiertem Missbrauch (z. B. massenhaften Uploads oder KI-Anfragen) führt der
+              Server pro angemeldetem Konto einen Zähler der Anzahl von Anfragen innerhalb kurzer
+              Zeitfenster. Dieser Zähler wird ausschließlich im Arbeitsspeicher des
+              Server-Prozesses geführt, nicht in der Datenbank gespeichert, nicht an Dritte
+              weitergegeben und geht bei einem Neustart des Servers verloren.
             </li>
             <li>
               <strong>Technische Zugriffsdaten:</strong> Wie bei jedem Webserver-Betrieb können
               beim Aufruf der Anwendung technische Daten (z. B. IP-Adresse, Zeitpunkt, aufgerufene
               Adresse) im Server-Prozess bzw. beim vorgeschalteten Reverse Proxy (siehe Abschnitt
-              6) anfallen. Die Anwendung selbst speichert diese Daten aktuell nicht dauerhaft in
-              der Datenbank.
+              6) anfallen. Weder die Anwendung selbst noch der Reverse Proxy sind aktuell so
+              konfiguriert, dass diese Zugriffsdaten dauerhaft in einer Datei oder Datenbank
+              protokolliert werden.
             </li>
             <li>
               <strong>Fehlerprotokolle:</strong> Bei unerwarteten technischen Fehlern wird ein
@@ -141,8 +155,11 @@ function Datenschutz() {
           </p>
           <p>
             Rechtsgrundlage ist in der Regel Art. 6 Abs. 1 lit. b DSGVO (Erfüllung des
-            Nutzungsvertrags bzw. Durchführung vorvertraglicher Maßnahmen). Diese Einschätzung
-            sollte im Rahmen der rechtlichen Prüfung final bestätigt werden.
+            Nutzungsvertrags bzw. Durchführung vorvertraglicher Maßnahmen). Für den in Abschnitt 2
+            genannten Rate-Limiting-Zähler ist Rechtsgrundlage Art. 6 Abs. 1 lit. f DSGVO
+            (berechtigtes Interesse an der Verfügbarkeit und dem Schutz des Dienstes vor
+            Missbrauch). Diese Einschätzungen sollten im Rahmen der rechtlichen Prüfung final
+            bestätigt werden.
           </p>
 
           <h2>4. Auftragsverarbeiter und Weitergabe an Dritte</h2>
@@ -166,10 +183,12 @@ function Datenschutz() {
               <strong>NVIDIA (build.nvidia.com, KI-Analyse):</strong> Der aktuell aktive
               KI-Anbieter dieser Anwendung ist NVIDIA (NVIDIA NIM API). Der aus Ihrem Dokument
               extrahierte Textinhalt wird zur Analyse an die NVIDIA-API übermittelt. NVIDIA
-              Corporation ist ein US-amerikanischer Anbieter außerhalb der EU. Eine förmliche
+              Corporation ist ein US-amerikanischer Anbieter außerhalb der EU/des EWR; es handelt
+              sich hierbei um eine Drittlandübermittlung. Eine förmliche
               Auftragsverarbeitungsvereinbarung mit NVIDIA sowie eine abschließende Bewertung
-              der Rechtsgrundlage für diese Drittlandübermittlung stehen noch aus und sollten
-              vor einem öffentlichen Betrieb geklärt werden [BESTÄTIGEN].
+              der Rechtsgrundlage für diese Drittlandübermittlung (z. B. EU-Standardvertrags-
+              klauseln) stehen noch aus und sind zeitnah im Rahmen der noch ausstehenden
+              rechtlichen Prüfung zu klären [BESTÄTIGEN].
             </li>
             <li>
               <strong>Claude API (Anthropic) - optionaler Anbieter:</strong> Die Anwendung
@@ -186,14 +205,17 @@ function Datenschutz() {
               derzeit nicht aktiv.
             </li>
             <li>
-              <strong>Stripe (Zahlungsabwicklung):</strong> Sofern Sie ein kostenpflichtiges
-              Abonnement abschließen, erfolgt die Zahlungsabwicklung über Stripe. Ihre
-              Zahlungsdaten (z. B. Kartendaten) werden dabei ausschließlich von Stripe erhoben
-              und verarbeitet und erreichen unsere eigene Anwendung zu keinem Zeitpunkt
-              vollständig - wir erhalten von Stripe lediglich die in Abschnitt 2 genannten
-              Verknüpfungsdaten. Die für Ihr Stripe-Konto zuständige Stripe-Vertragspartei bzw.
-              deren Sitz (z. B. Stripe Payments Europe, Ltd. für EWR-Kundinnen und -Kunden
-              gegenüber Stripe, Inc. in den USA) ist [BESTÄTIGEN].
+              <strong>Stripe (Zahlungsabwicklung):</strong> Die Zahlungsabwicklung für ein
+              künftiges kostenpflichtiges Abonnement erfolgt über Stripe.{' '}
+              <strong>Aktuell läuft die Stripe-Integration ausschließlich im Testmodus</strong>{' '}
+              - es finden keine echten Zahlungen statt, und es werden noch keine realen
+              Kundinnen- oder Kundendaten an Stripe übermittelt. Sobald echte Zahlungen
+              entgegengenommen werden, werden Ihre Zahlungsdaten (z. B. Kartendaten)
+              ausschließlich von Stripe erhoben und verarbeitet und erreichen unsere eigene
+              Anwendung zu keinem Zeitpunkt vollständig - wir erhalten von Stripe lediglich die
+              in Abschnitt 2 genannten Verknüpfungsdaten. Die für Ihr Stripe-Konto zuständige
+              Stripe-Vertragspartei bzw. deren Sitz (z. B. Stripe Payments Europe, Ltd. für
+              EWR-Kundinnen und -Kunden gegenüber Stripe, Inc. in den USA) ist [BESTÄTIGEN].
             </li>
             <li>
               <strong>Hetzner Online GmbH (Hosting):</strong> Die Anwendung wird auf einem
@@ -227,18 +249,32 @@ function Datenschutz() {
           </ul>
           <p>
             Die Löschung erfolgt sofort und ist nicht rückgängig zu machen; es gibt keine
-            Wiederherstellungsmöglichkeit. Ausgenommen sind gesetzlich vorgeschriebene
-            Aufbewahrungspflichten (z. B. handels- oder steuerrechtliche Aufbewahrungsfristen für
-            Zahlungs-/Rechnungsdaten), sofern solche im Einzelfall bestehen.
+            Wiederherstellungsmöglichkeit über die Anwendung selbst. Ausgenommen sind gesetzlich
+            vorgeschriebene Aufbewahrungspflichten (z. B. handels- oder steuerrechtliche
+            Aufbewahrungsfristen für Zahlungs-/Rechnungsdaten), sofern solche im Einzelfall
+            bestehen, sowie die nachfolgend beschriebenen technischen Backups.
+          </p>
+          <p>
+            <strong>Technische Backups:</strong> Unabhängig von einer Löschung durch Sie wird die
+            gesamte Datenbank (einschließlich aller Konten, Dokumente und Analyseergebnisse) sowie
+            das Uploads-Verzeichnis täglich automatisiert in ein lokales, auf demselben Server
+            befindliches Restic-Repository gesichert. Diese Backups sind Ende-zu-Ende (client-
+            seitig) verschlüsselt und werden nach 14 Tagen automatisch gelöscht (Restic{' '}
+            <code>--keep-daily 14 --prune</code>). Das bedeutet: Daten, die Sie über die
+            Konto-Löschfunktion entfernen, können bis zu 14 Tage lang noch in einem älteren,
+            verschlüsselten Backup enthalten sein, bevor auch das letzte Backup, das sie noch
+            enthielt, automatisch gelöscht wird. Ein Zugriff auf diese Backups erfolgt nur im
+            Rahmen einer Wiederherstellung nach einem technischen Defekt, nicht routinemäßig.
           </p>
 
           <h2>6. Hosting</h2>
           <p>
             Die Anwendung wird produktiv auf einem Server der Hetzner Online GmbH betrieben
-            (Standort: Rechenzentrum [BESTÄTIGEN, laut interner Angabe Nürnberg], Deutschland).
-            Die Auslieferung erfolgt über einen Reverse Proxy (Caddy) mit automatisch
-            bezogenem TLS-Zertifikat (Let's Encrypt), sodass sämtlicher Datenverkehr zwischen
-            Ihrem Browser und dem Server verschlüsselt ist.
+            (Standort: Rechenzentrum Nürnberg, Deutschland). Die Auslieferung erfolgt über einen
+            Reverse Proxy (Caddy) mit automatisch bezogenem TLS-Zertifikat (Let's Encrypt), sowie
+            mit von Caddy gesetzten Sicherheits-Headern (u. a. HSTS, Content-Security-Policy,
+            X-Frame-Options), sodass sämtlicher Datenverkehr zwischen Ihrem Browser und dem
+            Server verschlüsselt ist.
           </p>
 
           <h2>7. Ihre Rechte</h2>
