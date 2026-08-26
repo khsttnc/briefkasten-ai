@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   uploadDocument,
   analyzeDocumentById,
@@ -28,6 +28,20 @@ const TOOL_SECTION_ID = 'analiz-araci';
 // NVIDIA API: ~2-5s for a short letter vs. ~8-16s for a real 500,000-char
 // document) - worth telling the user up front instead of a bare spinner.
 const LONG_DOCUMENT_CHAR_THRESHOLD = 50_000;
+
+// No fetch in this app had a client-side timeout before - a real
+// production report was the AI-analyze request hanging indefinitely in
+// the browser (backend logs showed a clean 200 response for it, so the
+// request did complete server-side; the promise in the browser never
+// settled to reflect that) with page reload as the only recovery. This
+// bounds every AI-analyze request so that class of hang always resolves
+// into a visible, actionable error instead of an indefinite "çalışıyor..."
+// with no way out. Reasoned, not measured against the current model
+// (openai/gpt-oss-120b - see backend/app/config.py): generously above the
+// ~8-16s measured for a 500,000-character document against the previous
+// model, to avoid false-positive timeouts on a legitimately slow but
+// otherwise-successful analysis.
+const AI_ANALYZE_TIMEOUT_MS = 60_000;
 
 interface AppError {
   message: string;
@@ -194,6 +208,13 @@ function AppHome() {
   // remount and re-fetch - otherwise a document analyzed in the current
   // session never shows its priority/deadline there until the page reloads.
   const [documentsRefreshKey, setDocumentsRefreshKey] = useState(0);
+  // Incremented on every handleAIAnalyze call, checked again once its
+  // request settles - so a request that resolves/rejects after having
+  // been superseded (should no longer be reachable now that aiLoading
+  // blocks a second concurrent click, but cheap insurance against a
+  // future change reintroducing that path) can't overwrite state with a
+  // stale result.
+  const aiRequestIdRef = useRef(0);
 
   const documentId = useMemo(() => uploadResult?.id ?? null, [uploadResult]);
 
@@ -272,6 +293,10 @@ function AppHome() {
     );
     setAILoading(true);
 
+    const requestId = ++aiRequestIdRef.current;
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), AI_ANALYZE_TIMEOUT_MS);
+
     try {
       // Deliberately no re-analyze affordance in the UI: the same NVIDIA
       // model measurably gives a different (sometimes factually wrong)
@@ -282,15 +307,33 @@ function AppHome() {
       // re-analysis path still exists (services.py) for a developer to
       // trigger manually after a taxonomy/prompt update, just not from
       // this UI.
-      const response = await analyzeDocumentAIById(documentId);
+      const response = await analyzeDocumentAIById(documentId, { signal: controller.signal });
+      if (aiRequestIdRef.current !== requestId) {
+        // Superseded by a newer request while this one was in flight -
+        // don't let a late response overwrite it.
+        return;
+      }
       setAIResult(response);
       setAIStatusMessage('AI analizi tamamlandı. Sonuçlar aşağıda gösteriliyor.');
       setDocumentsRefreshKey((key) => key + 1);
     } catch (err) {
-      setAIError({ message: err instanceof Error ? err.message : 'AI analizi sırasında bir hata oluştu.' });
+      if (aiRequestIdRef.current !== requestId) {
+        return;
+      }
+      const timedOut = err instanceof DOMException && err.name === 'AbortError';
+      setAIError({
+        message: timedOut
+          ? 'AI analizi çok uzun sürdü ve zaman aşımına uğradı. Lütfen tekrar deneyin.'
+          : err instanceof Error
+          ? err.message
+          : 'AI analizi sırasında bir hata oluştu.',
+      });
       setAIStatusMessage('');
     } finally {
-      setAILoading(false);
+      window.clearTimeout(timeoutId);
+      if (aiRequestIdRef.current === requestId) {
+        setAILoading(false);
+      }
     }
   };
 

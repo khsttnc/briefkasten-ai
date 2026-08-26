@@ -124,7 +124,7 @@ export async function analyzeDocumentById(documentId: number): Promise<AnalyzeRe
 
 export async function analyzeDocumentAIById(
   documentId: number,
-  options?: { force?: boolean }
+  options?: { force?: boolean; signal?: AbortSignal }
 ): Promise<AIAnalysisResponse> {
   const url = options?.force
     ? `${apiBase}/analyze/id/${documentId}/ai?force=true`
@@ -132,6 +132,7 @@ export async function analyzeDocumentAIById(
   const response = await fetch(url, {
     method: 'POST',
     headers: await authHeaders(),
+    signal: options?.signal,
   });
   return parseJsonResponse(response);
 }
