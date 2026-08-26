@@ -3,6 +3,7 @@ import unittest
 from .entity_validation import (
     MAX_ENTITIES_PER_TYPE_BEFORE_SUMMARIZING,
     MAX_EXTRACTED_ENTITIES,
+    validate_explanatory_text,
     validate_extracted_entities,
     validate_important_dates,
     validate_intelligence_signals,
@@ -328,7 +329,10 @@ class PaymentRequestedValidationTestCase(unittest.TestCase):
         )
 
     def test_payment_requested_with_textual_evidence_is_kept(self):
-        text_with_payment = KUENDIGUNG_TEXT + "Der ausstehende Betrag ist zu zahlen.\n"
+        # Needs both an amount AND a payment-action verb (see
+        # _has_payment_evidence) - a bare "Betrag" mention alone is no
+        # longer sufficient evidence (see PaymentEvidenceTighteningTestCase).
+        text_with_payment = KUENDIGUNG_TEXT + "Der Betrag von 129,90 EUR ist zu zahlen.\n"
         raw = {
             "payment_requested": True,
             "action_summary": "Ödemeyi yapın.",
@@ -342,6 +346,96 @@ class PaymentRequestedValidationTestCase(unittest.TestCase):
         result = validate_intelligence_signals(raw, KUENDIGUNG_TEXT)
         self.assertFalse(result["payment_requested"])
         self.assertEqual(result["action_summary"], "Fristgerecht melden.")
+
+
+# A real-shaped Antragsformular (application form) for a credit-card debt
+# insurance product - mentions Kreditkarte/Bank/Versicherung by name (what
+# the form is ABOUT) but never actually asks the reader to pay anything.
+# This is the exact production false positive that motivated tightening the
+# payment-evidence check: the old broad keyword list ("Betrag", "EUR",
+# "Rechnung") would have accepted this text as evidence of a payment
+# demand, and it also contains no date at all, matching the reported
+# hallucinated-date incident.
+ANTRAGSFORMULAR_TEXT = (
+    "Antragsformular für vorübergehende Arbeitsunfähigkeit\n"
+    "Restschuldversicherung zu Ihrer Kreditkarte - Advanzia Bank\n"
+    "Bitte füllen Sie dieses Formular vollständig aus und senden Sie es "
+    "zusammen mit einer ärztlichen Bescheinigung zurück.\n"
+    "Crawford & Company im Auftrag der Versicherung.\n"
+)
+
+
+class PaymentEvidenceTighteningTestCase(unittest.TestCase):
+    """Regression guard for the reported production bug: a document merely
+    naming a bank, credit card, or insurance product must not be accepted
+    as evidence of an actual payment demand - only an amount AND a
+    payment-action verb, together, count."""
+
+    def test_amount_and_verb_together_is_sufficient_evidence(self):
+        raw = {"payment_requested": True, "action_summary": "Ödeyin."}
+        text = "Bitte zahlen Sie den Betrag von 50,00 EUR bis zum Fälligkeitsdatum."
+        result = validate_intelligence_signals(raw, text)
+        self.assertTrue(result["payment_requested"])
+
+    def test_bank_credit_card_insurance_wording_alone_is_not_evidence(self):
+        raw = {"payment_requested": True, "action_summary": "15 gün içinde ödeyin."}
+        result = validate_intelligence_signals(raw, ANTRAGSFORMULAR_TEXT)
+        self.assertFalse(result["payment_requested"])
+        self.assertIsNone(result["action_summary"])
+
+    def test_amount_without_action_verb_is_not_sufficient_evidence(self):
+        raw = {"payment_requested": True, "action_summary": "Ödeyin."}
+        text = KUENDIGUNG_TEXT + "Ihr aktueller Kontostand betrug zuletzt 50,00 EUR.\n"
+        result = validate_intelligence_signals(raw, text)
+        self.assertFalse(result["payment_requested"])
+
+    def test_action_verb_without_amount_is_not_sufficient_evidence(self):
+        raw = {"payment_requested": True, "action_summary": "Ödeyin."}
+        text = KUENDIGUNG_TEXT + "Der Betrag ist fällig.\n"
+        result = validate_intelligence_signals(raw, text)
+        self.assertFalse(result["payment_requested"])
+
+
+class ExplanatoryTextValidationTestCase(unittest.TestCase):
+    """validate_explanatory_text is the only guard for summary/
+    turkish_explanation - fields with no structured counterpart, produced
+    by every AI provider regardless of whether document_intelligence.
+    SIGNAL_KEYS are populated at all (see claude_provider.py before this
+    fix). Regression guard for the reported production bug: an
+    Antragsformular came back with four fabricated dates and a "pay within
+    15 days" narrative baked directly into turkish_explanation."""
+
+    def test_text_without_dates_or_payment_claims_is_kept(self):
+        text = "Bitte füllen Sie das Formular aus und senden Sie es zurück."
+        self.assertEqual(validate_explanatory_text(text, ANTRAGSFORMULAR_TEXT), text)
+
+    def test_text_with_date_not_in_source_is_dropped(self):
+        text = "Der Antrag muss bis zum 20.01.2026 eingereicht werden."
+        self.assertIsNone(validate_explanatory_text(text, ANTRAGSFORMULAR_TEXT))
+
+    def test_text_with_date_present_in_source_is_kept(self):
+        text = "Kündigung zum 28.02.2020."
+        self.assertEqual(validate_explanatory_text(text, KUENDIGUNG_TEXT), text)
+
+    def test_fabricated_payment_narrative_without_evidence_is_dropped(self):
+        # The exact reported production bug, translated: "this document
+        # contains an invoice and requires the customer to make their
+        # credit card bill payments" / "pay within 15 days".
+        text = (
+            "Bu belge, müşterinin kredi kartı fatura ödemelerini yapması "
+            "gereken bir fatura ve 15 gün içinde ödeme süresi içerir."
+        )
+        self.assertIsNone(validate_explanatory_text(text, ANTRAGSFORMULAR_TEXT))
+
+    def test_payment_wording_with_real_evidence_is_kept(self):
+        text = "Lütfen 129,90 EUR tutarını ödeyin."
+        source = KUENDIGUNG_TEXT + "Der Betrag von 129,90 EUR ist zu zahlen.\n"
+        self.assertEqual(validate_explanatory_text(text, source), text)
+
+    def test_none_and_blank_input_returns_none(self):
+        self.assertIsNone(validate_explanatory_text(None, ANTRAGSFORMULAR_TEXT))
+        self.assertIsNone(validate_explanatory_text("   ", ANTRAGSFORMULAR_TEXT))
+        self.assertIsNone(validate_explanatory_text(123, ANTRAGSFORMULAR_TEXT))
 
 
 if __name__ == "__main__":

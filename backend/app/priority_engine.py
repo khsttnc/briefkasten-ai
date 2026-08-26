@@ -53,6 +53,12 @@ _DOCUMENT_TYPE_POINTS = {
     "Kündigung": 2,
     "Mahnung": 1,
     "Rechnung": 1,
+    # A blank/partially-filled form the reader is meant to fill in and
+    # submit (see CLASSIFIED_DOCUMENT_TYPE_KEY's prompt instructions) - not
+    # inherently urgent by itself, same weight class as Information; a real
+    # submission deadline extracted alongside it already pushes the score
+    # up via deadline_type on its own merit.
+    "Formular": 0,
     "Information": 0,
 }
 

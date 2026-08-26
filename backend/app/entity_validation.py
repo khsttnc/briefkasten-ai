@@ -197,25 +197,79 @@ def validate_important_dates(
     return validated
 
 
-# Keywords whose presence anywhere in the source text is treated as evidence
-# that the document genuinely requests a payment. Deliberately broad
-# (case-insensitive substring match) rather than a precise parser - the goal
-# is only to catch the case where the LLM claims payment_requested=true with
-# no textual basis whatsoever (fully invented), not to second-guess a
-# borderline-but-real payment mention.
-_PAYMENT_EVIDENCE_KEYWORDS_DE = (
-    "zahlen", "zahlung", "betrag", "eur", "€", "rechnung", "fällig", "faellig",
+# Evidence that the document genuinely requests a payment: a currency
+# amount AND a payment-action verb, BOTH present somewhere in the source
+# text. A single broad keyword (the previous approach - "Betrag", "EUR",
+# "Rechnung", or similar) is not enough: a real production false positive
+# was an Antragsformular (application form) for a credit-card debt
+# insurance product, whose text mentioned "Kreditkarte", "Bank", and
+# "Versicherung" without requesting any payment at all - none of those
+# individually imply a payment demand, but the old single-keyword check
+# (which also included "Rechnung"/"Betrag") would have accepted any of
+# them as sufficient evidence. Requiring an amount AND a verb together is
+# still deliberately loose (no proximity/sentence-level check, no attempt
+# to also require a due date) - the goal remains only to catch the case
+# where the LLM claims payment_requested=true with no textual basis
+# whatsoever, not to precisely parse every real payment demand.
+_PAYMENT_AMOUNT_RE = re.compile(r"(?:€\s?\d[\d.,]*|\d[\d.,]*\s?(?:€|eur\b))", re.IGNORECASE)
+
+_PAYMENT_ACTION_VERBS_DE = (
+    "zu zahlen", "zahlen sie", "bitte zahlen", "überweisen", "überweisung",
+    "entrichten", "beglichen", "fällig", "zahlungsfrist", "einzuzahlen",
+    "vollstreckung",
 )
 
-# Turkish payment-related wording that action_summary might contain when
-# payment_requested was (wrongly) true. Used only to decide whether
-# action_summary needs to be dropped once payment_requested is downgraded -
-# see _validate_payment_requested. Not an attempt to detect payment mentions
-# in general, only to clean up after a just-falsified payment_requested.
+# Turkish payment-related wording that a free-text field (action_summary,
+# summary, turkish_explanation) might contain when it asserts a payment
+# obligation the source text doesn't actually support. Used two ways: (1)
+# to decide whether action_summary needs to be dropped once
+# payment_requested is downgraded (_validate_payment_requested), and (2) by
+# validate_explanatory_text to catch the same fabricated-payment-claim
+# pattern in summary/turkish_explanation directly - which matters because
+# those two fields are produced by every provider even when it populates no
+# other document_intelligence.SIGNAL_KEYS at all (ClaudeProvider's prompt
+# didn't, until it was wired into the shared signal-key prompt - see
+# claude_provider.py), so a payment_requested=false check alone would miss
+# a payment narrative invented straight into the prose.
 _PAYMENT_KEYWORDS_TR = (
     "öde", "ödeme", "ödeyin", "ödenmesi", "ödenecek", "borç", "borc",
     "tutar", "fatura", "avans", "€", "eur", " tl",
 )
+
+
+def _has_payment_evidence(source_text: str) -> bool:
+    lowered_text = source_text.lower()
+    has_amount = bool(_PAYMENT_AMOUNT_RE.search(source_text))
+    has_action_verb = any(verb in lowered_text for verb in _PAYMENT_ACTION_VERBS_DE)
+    return has_amount and has_action_verb
+
+
+def _drop_if_hallucinated_date(value: Optional[str], source_dates: Set[date]) -> Optional[str]:
+    """None/empty in, None out. Otherwise drops value entirely (not a
+    partial edit - see the fail-closed rationale repeated throughout this
+    module) if it contains an absolute date not found anywhere in the
+    source text."""
+    if not _is_verifiable_value(value):
+        return None
+    field_dates = find_all_dates_in_text(value)
+    if field_dates and not field_dates.issubset(source_dates):
+        return None
+    return value
+
+
+def _drop_if_unevidenced_payment_claim(value: Optional[str], source_text: str) -> Optional[str]:
+    if not value:
+        return value
+    if any(keyword in value.lower() for keyword in _PAYMENT_KEYWORDS_TR) and not _has_payment_evidence(
+        source_text
+    ):
+        # Not attempting to surgically remove just the payment-related
+        # clause from a free-form LLM sentence - that risks leaving a
+        # grammatically broken or still-misleading remainder. Dropping the
+        # whole (now partly fabricated) field is the same fail-closed
+        # choice already made for individual entities above.
+        return None
+    return value
 
 
 def _validate_payment_requested(
@@ -226,24 +280,48 @@ def _validate_payment_requested(
     if not payment_requested:
         return payment_requested, action_summary
 
-    lowered_text = source_text.lower()
-    if any(keyword in lowered_text for keyword in _PAYMENT_EVIDENCE_KEYWORDS_DE):
+    if _has_payment_evidence(source_text):
         return payment_requested, action_summary
 
     # No textual evidence anywhere in the source for a payment demand -
     # fail closed rather than surface a fabricated "pay within N days"
     # claim to the reader.
-    if action_summary and any(
-        keyword in action_summary.lower() for keyword in _PAYMENT_KEYWORDS_TR
-    ):
-        # Not attempting to surgically remove just the payment-related
-        # clause from a free-form LLM sentence - that risks leaving a
-        # grammatically broken or still-misleading remainder. Dropping the
-        # whole (now partly fabricated) summary is the same fail-closed
-        # choice already made for individual entities above.
-        action_summary = None
+    action_summary = _drop_if_unevidenced_payment_claim(action_summary, source_text)
 
     return False, action_summary
+
+
+def validate_explanatory_text(
+    value: Any,
+    source_text: Optional[str],
+) -> Optional[str]:
+    """Fail-closed verification for summary/turkish_explanation - the two
+    free-form LLM fields never covered by validate_intelligence_signals.
+    Unlike every other field in this module, these have no structured
+    counterpart, and every AI provider produces them regardless of whether
+    it also populates document_intelligence.SIGNAL_KEYS - so this is the
+    only backstop against a hallucinated date or an invented payment
+    obligation embedded directly in the prose shown to the reader
+    ("Açıklama" in the UI). Confirmed production case: a credit-card
+    debt-insurance APPLICATION FORM (nothing billed, nothing due) came back
+    from a provider populating no SIGNAL_KEYS at all (ClaudeProvider's
+    prompt, before it was wired into the shared signal-key prompt - see
+    claude_provider.py) classified as an invoice, with four fabricated
+    dates and a "pay within 15 days" narrative baked into
+    turkish_explanation - payment_requested itself was never even involved.
+    Kept as a backstop even now that Claude is wired in too: a future
+    provider or prompt regression could reintroduce the same gap.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+
+    text = source_text or ""
+    source_dates = find_all_dates_in_text(text)
+
+    value = _drop_if_hallucinated_date(value, source_dates)
+    value = _drop_if_unevidenced_payment_claim(value, text)
+
+    return value
 
 
 def _validate_date_string(value: Any, source_dates: Set[date]) -> Optional[str]:
@@ -311,8 +389,7 @@ def validate_intelligence_signals(
     )
 
     payment_requested = raw_response.get(PAYMENT_REQUESTED_KEY) is True
-    action_summary = raw_response.get(ACTION_SUMMARY_KEY)
-    action_summary = action_summary if _is_verifiable_value(action_summary) else None
+    action_summary = _drop_if_hallucinated_date(raw_response.get(ACTION_SUMMARY_KEY), source_dates)
     payment_requested, action_summary = _validate_payment_requested(
         payment_requested, action_summary, text
     )

@@ -91,6 +91,31 @@ class ScoringTestCase(unittest.TestCase):
         )
         self.assertEqual(result.priority_level, "low")
 
+    def test_formular_alone_is_low(self):
+        # A blank/partially-filled form the reader submits (e.g. an
+        # Antragsformular) is not inherently urgent by itself - same weight
+        # class as Information. Regression guard for the production
+        # misclassification where such a form was labeled "Rechnung"
+        # instead (Formular didn't exist as a category at all before this).
+        result = classify_priority(
+            PriorityInput(sender_category="Unternehmen", document_type="Formular")
+        )
+        self.assertEqual(result.priority_level, "low")
+
+    def test_formular_with_absolute_deadline_is_still_elevated(self):
+        # A real submission deadline extracted alongside a Formular must
+        # still raise priority on its own merit - Formular's own weight
+        # being 0 doesn't suppress that.
+        result = classify_priority(
+            PriorityInput(
+                sender_category="Unternehmen",
+                document_type="Formular",
+                deadline_type="absolute",
+                deadline_certainty="exact",
+            )
+        )
+        self.assertNotEqual(result.priority_level, "low")
+
     def test_authority_with_change_notice_and_absolute_deadline_is_normal_or_above(self):
         result = classify_priority(
             PriorityInput(

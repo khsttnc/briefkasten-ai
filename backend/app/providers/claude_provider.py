@@ -18,7 +18,36 @@ from ..config import (
     DEFAULT_ANTHROPIC_MODEL,
     env_or_default,
 )
-from ..document_intelligence import OUTPUT_LANGUAGE_NAME
+# Reused, not retyped: the Document Intelligence signal-key prompt is
+# provider-agnostic text built from document_intelligence.SIGNAL_KEYS (see
+# nvidia_provider.py, which does the same). Claude's own prompt previously
+# asked only for document_type/language/summary/turkish_explanation/
+# important_dates/extracted_entities - none of sender_category,
+# classified_document_type, deadline_raw_text, document_date,
+# effective_date, payment_requested, objection_right_mentioned,
+# action_summary, or multiple_deadlines_detected, meaning
+# deadline_engine/priority_engine and entity_validation.validate_intelligence_signals
+# never received any real data to act on for Claude - the provider
+# config.py defaults to (DEFAULT_AI_PROVIDER = "claude"). Confirmed root
+# cause of a real production misclassification (see the entity_validation
+# module docstring / TODO history for the incident): a credit-card
+# debt-insurance application form was labeled "Rechnung" and given a
+# fabricated payment narrative, entirely inside the unconstrained
+# document_type/turkish_explanation fields the old prompt allowed.
+from .ollama_provider import _build_ollama_prompt as _build_claude_prompt
+
+# ESTIMATE, not measured against the live Claude API (no ANTHROPIC_API_KEY
+# was available in backend/.env at the time this was written to make a real
+# call - see nvidia_provider.py's DEFAULT_MAX_TOKENS comment for how a real
+# measurement is normally done and documented here). Set to match
+# nvidia_provider.DEFAULT_MAX_TOKENS as the closest available reference
+# point: NVIDIA's real measured completion length for this exact shared
+# prompt (_build_ollama_prompt) was ~438-585 tokens on a realistic
+# 500,000-character document, and 4000 was chosen there for ~7x headroom.
+# Anthropic's tokenizer differs from NVIDIA's, so this number could be off
+# in either direction - re-measure against a real Claude call once an API
+# key is available, rather than trusting this estimate indefinitely.
+DEFAULT_MAX_TOKENS = 4000
 
 
 def _load_json_safe(text: str) -> Optional[Dict[str, Any]]:
@@ -60,29 +89,6 @@ def _load_json_safe(text: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _build_claude_prompt(text: str) -> str:
-    return (
-        "You are an AI assistant tasked with analyzing German official or corporate documents. "
-        "Return a JSON object with the following keys: document_type, language, summary, "
-        "turkish_explanation, important_dates, extracted_entities. "
-        "The response must be valid JSON only, without extra commentary. "
-        "Do not hallucinate. If a detail is uncertain, state that clearly in the output. "
-        "If the text below contains a line starting with \"[SYSTEM NOTE:\", everything "
-        "described in that note was cut out by the application before reaching you, not by "
-        "the document's sender - never guess or invent content (especially a deadline, date, "
-        "or amount) to fill that gap. "
-        f"Both summary and turkish_explanation MUST be written in the "
-        f"{OUTPUT_LANGUAGE_NAME.upper()} language, regardless of the document's own language - "
-        "never English, never German. "
-        f"summary must be at most 2 sentences. turkish_explanation must be at most 5 "
-        "sentences - do not exceed 5 sentences even if more detail would be possible. "
-        "Important entities should include people, companies, reference numbers, file numbers, amounts, and other relevant identifiers. "
-        "Document type should describe what the document is (invoice, letter, contract, notice, application, etc.). "
-        "If the input text contains German content, base the language detection on the document itself. "
-        "Text:\n" + text + "\n\n"
-    )
-
-
 class ClaudeProvider(BaseAIProvider):
     def __init__(self) -> None:
         api_key = os.getenv(ANTHROPIC_API_KEY_ENV)
@@ -103,12 +109,17 @@ class ClaudeProvider(BaseAIProvider):
         return self._model
 
     def analyze_document(self, text: str) -> AIAnalysisResult:
-        prompt = _build_claude_prompt(text)
+        return self._send_request(_build_claude_prompt(text))
+
+    def analyze_document_with_task(self, text: str, task: str) -> AIAnalysisResult:
+        return self._send_request(_build_claude_prompt(text, task))
+
+    def _send_request(self, prompt: str) -> AIAnalysisResult:
         try:
             response = self.client.messages.create(
                 model=self._model,
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=1200,
+                max_tokens=DEFAULT_MAX_TOKENS,
             )
         # RateLimitError and AuthenticationError are subclasses of APIStatusError,
         # so they must be caught before the general APIStatusError branch.
@@ -173,6 +184,3 @@ class ClaudeProvider(BaseAIProvider):
             extracted_entities=parsed.get("extracted_entities"),
             raw_response=parsed,
         )
-
-    def analyze_document_with_task(self, text: str, task: str) -> AIAnalysisResult:
-        return self.analyze_document(text)

@@ -24,6 +24,7 @@ pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
 from .ai_service import AIService
 from .document_intelligence import derive_intelligence_fields, normalize_language_label
 from .entity_validation import (
+    validate_explanatory_text,
     validate_extracted_entities,
     validate_important_dates,
     validate_intelligence_signals,
@@ -422,6 +423,15 @@ def analyze_document_ai_by_id(
     )
     analysis_result.important_dates = validate_important_dates(
         analysis_result.important_dates, document.text or ""
+    )
+    # summary/turkish_explanation get no structured counterpart to check
+    # against (unlike deadline_raw_text/document_date/effective_date/
+    # payment_requested below) and are produced by every provider
+    # regardless of whether it populates document_intelligence.SIGNAL_KEYS
+    # at all - see entity_validation.validate_explanatory_text.
+    analysis_result.summary = validate_explanatory_text(analysis_result.summary, document.text or "")
+    analysis_result.turkish_explanation = validate_explanatory_text(
+        analysis_result.turkish_explanation, document.text or ""
     )
 
     status = "failed" if analysis_result.error_message else "completed"

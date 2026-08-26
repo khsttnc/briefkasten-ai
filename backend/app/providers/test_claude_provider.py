@@ -26,10 +26,19 @@ def _httpx_response(status_code: int, body: dict) -> httpx.Response:
 
 class TestClaudeProvider(unittest.TestCase):
     def test_build_prompt_contains_expected_fields(self):
+        # _build_claude_prompt is the shared document_intelligence.SIGNAL_KEYS
+        # prompt (see providers/ollama_provider.py's _build_ollama_prompt,
+        # reused here instead of retyped) - Claude's own hand-written prompt
+        # previously asked for none of these signal keys at all, which is
+        # why deadline_engine/priority_engine/entity_validation never saw
+        # real data for Claude-analyzed documents in production.
         prompt = _build_claude_prompt('Das ist ein Testdokument.')
         self.assertIn('document_type', prompt)
         self.assertIn('turkish_explanation', prompt)
-        self.assertIn('Important entities', prompt)
+        self.assertIn('classified_document_type', prompt)
+        self.assertIn('deadline_raw_text', prompt)
+        self.assertIn('payment_requested', prompt)
+        self.assertIn('sender_category', prompt)
 
     def test_load_json_safe_valid(self):
         text = '{"document_type": "contract", "language": "de"}'
@@ -83,6 +92,32 @@ class TestClaudeProvider(unittest.TestCase):
         self.assertEqual(result.turkish_explanation, 'Açıklama')
         self.assertEqual(result.important_dates, ['2026-08-08'])
         self.assertEqual(result.extracted_entities, [{'name': 'Firma'}])
+
+    @patch('backend.app.providers.claude_provider.Anthropic')
+    @patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'})
+    def test_claude_provider_passes_through_signal_keys(self, mock_anthropic):
+        # Regression guard: raw_response must carry the document_intelligence
+        # signal keys (classified_document_type, deadline_raw_text,
+        # document_date, payment_requested, ...) through unchanged when
+        # Claude's JSON response includes them - previously impossible
+        # because _build_claude_prompt never asked for them at all.
+        returned_text = (
+            '{"document_type": "letter", "language": "de", '
+            '"classified_document_type": "Kündigung", '
+            '"deadline_raw_text": "innerhalb von 14 Tagen", '
+            '"document_date": "2026-01-10", "payment_requested": false, '
+            '"sender_category": "Unternehmen"}'
+        )
+        mock_anthropic.return_value.messages.create.return_value = DummyResponse(returned_text)
+
+        provider = ClaudeProvider()
+        result = provider.analyze_document('Test text')
+
+        self.assertEqual(result.raw_response['classified_document_type'], 'Kündigung')
+        self.assertEqual(result.raw_response['deadline_raw_text'], 'innerhalb von 14 Tagen')
+        self.assertEqual(result.raw_response['document_date'], '2026-01-10')
+        self.assertIs(result.raw_response['payment_requested'], False)
+        self.assertEqual(result.raw_response['sender_category'], 'Unternehmen')
 
     @patch('backend.app.providers.claude_provider.Anthropic')
     @patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'})

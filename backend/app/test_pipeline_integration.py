@@ -579,6 +579,117 @@ class HallucinatedSignalPipelineTestCase(unittest.TestCase):
         self.assertTrue(stored_raw_response["payment_requested"])
 
 
+class FreeTextOnlySignalAIProvider:
+    """Stand-in for the exact shape of the real reported production bug:
+    an AI provider whose raw_response contains NO document_intelligence
+    SIGNAL_KEYS at all (this was ClaudeProvider's actual behavior before
+    it was wired into the shared signal-key prompt - see claude_provider.py)
+    - only document_type/language/summary/turkish_explanation/
+    important_dates/extracted_entities, with the misclassification and the
+    fabricated dates/payment narrative baked entirely into that free text."""
+
+    provider_name = "dummy-free-text-only"
+    model_name = "dummy-free-text-only-model"
+
+    def __init__(self):
+        self.calls = 0
+
+    def analyze_document(self, text: str) -> AIAnalysisResult:
+        self.calls += 1
+        raw_response = {
+            "document_type": "Rechnung",
+            "language": "de",
+            "summary": "Kredi kartı faturası ödeme talebi.",
+            "turkish_explanation": (
+                "Bu belge, müşterinin kredi kartı fatura ödemelerini yapması "
+                "gereken bir fatura ve 15 gün içinde ödeme süresi içerir."
+            ),
+            "important_dates": ["20.01.2026", "20.04.2026", "20.05.2026", "22.06.2026"],
+            "extracted_entities": [],
+        }
+        return AIAnalysisResult(
+            document_type=raw_response["document_type"],
+            language=raw_response["language"],
+            summary=raw_response["summary"],
+            turkish_explanation=raw_response["turkish_explanation"],
+            important_dates=raw_response["important_dates"],
+            extracted_entities=[],
+            raw_response=raw_response,
+        )
+
+
+class FreeTextOnlyHallucinationPipelineTestCase(unittest.TestCase):
+    """Regression guard for the exact reported production bug: a credit-card
+    debt-insurance APPLICATION FORM (Antragsformular) - nothing billed,
+    nothing due - came back from a provider with no structured signals at
+    all, entirely free text: mislabeled as an invoice, four fabricated
+    dates, and a "pay within 15 days" narrative. validate_intelligence_signals
+    alone cannot catch this (there is no deadline_raw_text/payment_requested
+    key to check) - only validate_important_dates and validate_explanatory_text,
+    which run regardless of which signal keys a given provider happens to
+    populate, can. Uses an isolated in-memory database and temp upload
+    directory - the real backend/briefkasten.db and backend/uploads/ are
+    never touched."""
+
+    def setUp(self):
+        self.tmp_dir = Path(tempfile.mkdtemp(prefix="briefkasten_freetext_hallucination_test_"))
+        self.upload_root_patcher = patch.object(services, "UPLOAD_ROOT", self.tmp_dir.resolve())
+        self.upload_root_patcher.start()
+
+        self.engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+        Base.metadata.create_all(bind=self.engine)
+        self.SessionLocal = sessionmaker(bind=self.engine)
+        self.db = self.SessionLocal()
+        self.owner_id = _create_test_user(self.db).id
+
+    def tearDown(self):
+        self.db.close()
+        self.upload_root_patcher.stop()
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def test_fabricated_dates_and_payment_narrative_are_dropped(self):
+        pdf_bytes = _build_sample_pdf_bytes(
+            "Antragsformular fuer voruebergehende Arbeitsunfaehigkeit\n"
+            "Restschuldversicherung zu Ihrer Kreditkarte - Advanzia Bank\n"
+            "Bitte fuellen Sie dieses Formular vollstaendig aus und senden "
+            "Sie es zurueck.\n"
+        )
+        document = services.save_document(
+            FakeUploadFile("Antragsformular.pdf", pdf_bytes), self.db, owner_id=self.owner_id
+        )
+        services.analyze_document_by_id(document.id, self.db, owner_id=self.owner_id)
+
+        provider = FreeTextOnlySignalAIProvider()
+        with patch.object(services, "get_ai_provider", return_value=provider):
+            result = services.analyze_document_ai_by_id(document.id, self.db, owner_id=self.owner_id)
+
+        self.assertEqual(result["status"], "completed")
+
+        # None of the four fabricated dates appear anywhere in the source
+        # text - all dropped from important_dates.
+        self.assertEqual(result["important_dates"], [])
+
+        # turkish_explanation's fabricated payment narrative has no textual
+        # evidence in the source (no amount, no payment-action verb) -
+        # dropped entirely rather than shown to the reader.
+        self.assertIsNone(result["turkish_explanation"])
+        self.assertIsNone(result["summary"])
+
+        stored = (
+            self.db.query(DocumentAIAnalysis)
+            .filter(DocumentAIAnalysis.document_id == document.id)
+            .one()
+        )
+        self.assertEqual(json.loads(stored.important_dates), [])
+        self.assertIsNone(stored.turkish_explanation)
+        self.assertIsNone(stored.summary)
+
+        # The persisted raw_response stays the true, unmodified audit trail.
+        stored_raw_response = json.loads(stored.raw_response)
+        self.assertIn("20.01.2026", stored_raw_response["important_dates"])
+        self.assertIn("15 gün içinde", stored_raw_response["turkish_explanation"])
+
+
 class DocumentIntelligencePostProcessingTestCase(unittest.TestCase):
     """Verifies the Step 3 wiring: the priority/deadline engines run after a
     successful or failed AI analysis and populate Document, but can never
