@@ -496,5 +496,59 @@ class OverAggressiveValidationRegressionTestCase(unittest.TestCase):
         self.assertEqual(result, ["10.12.2025"])
 
 
+# A real-shaped CHECK24 vehicle insurance QUOTE (Angebot/Tarifübersicht,
+# not a bill): states the selected tariff, its start date, and the
+# monthly premium as plain product information. No demand verb
+# ("zu zahlen"/"fällig"/etc.) anywhere - a real quote document doesn't
+# read like a Mahnung, it reads like a price sheet.
+CHECK24_INSURANCE_QUOTE_TEXT = (
+    "CHECK24 Kfz-Versicherungsvergleich - Ihr Angebot\n"
+    "Fahrzeugdaten, Ihre Praeferenzen und der gewaehlte Tarif:\n"
+    "Gewaehlter Tarif: ADAC Basis\n"
+    "Versicherungsbeginn: 03.07.2026\n"
+    "Monatlicher Beitrag: 71,19 EUR\n"
+)
+
+
+class PaymentInformationVsDemandRegressionTestCase(unittest.TestCase):
+    """Regression guard for the reported over-correction bug: an insurance
+    QUOTE stating a monthly premium as plain product information ("aylık
+    prim 71,19 €") had its entire correct explanation dropped, because the
+    old check required an amount AND a separate demand verb ("zu zahlen"
+    etc.) to co-occur in the source - a quote document never uses that
+    kind of wording, it's not a bill. The source-stated amount itself
+    (verifiable) is what should decide this, not the presence of a
+    command verb the document was never going to contain."""
+
+    def test_informational_premium_amount_matching_source_is_kept(self):
+        text = (
+            "Belge, müşterinin araç bilgileri, tercihleri ve seçtiği sigorta "
+            "tarifesi hakkında bilgi verir. Seçilen sigorta ADAC Basis ile "
+            "03.07.2026 tarihinden itibaren yürürlüğe girer ve aylık 71,19 € "
+            "prim ödenecektir."
+        )
+        self.assertEqual(
+            validate_explanatory_text(text, CHECK24_INSURANCE_QUOTE_TEXT), text
+        )
+
+    def test_premium_amount_not_matching_source_is_still_dropped(self):
+        # Sanity check: verifying the amount, not just detecting "öde"
+        # wording, must still fail closed on a genuinely fabricated
+        # number - the fix must not become "always keep if it mentions an
+        # amount at all".
+        text = "Aylık 199,99 € prim ödenecektir."
+        self.assertIsNone(
+            validate_explanatory_text(text, CHECK24_INSURANCE_QUOTE_TEXT)
+        )
+
+    def test_differently_formatted_matching_amount_is_still_recognized(self):
+        # "71.19" (dot decimal) vs source's "71,19" (comma decimal) -
+        # same amount, different formatting, must still match.
+        text = "Aylık prim: 71.19 EUR."
+        self.assertEqual(
+            validate_explanatory_text(text, CHECK24_INSURANCE_QUOTE_TEXT), text
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -282,6 +282,63 @@ def _drop_if_unevidenced_payment_claim(value: Optional[str], source_text: str) -
     return value
 
 
+def _normalize_amount(raw: str) -> str:
+    """"71,19 €" / "€71.19" / "71.19 EUR" -> "71.19", so the same amount
+    written with a different decimal/thousands separator or currency
+    marker still compares equal."""
+    digits = re.sub(r"[^\d.,]", "", raw)
+    if "," in digits and "." in digits:
+        if digits.rfind(",") > digits.rfind("."):
+            digits = digits.replace(".", "").replace(",", ".")
+        else:
+            digits = digits.replace(",", "")
+    elif "," in digits:
+        digits = digits.replace(",", ".")
+    try:
+        return f"{float(digits):.2f}"
+    except ValueError:
+        return digits
+
+
+def _extract_amounts(text: str) -> Set[str]:
+    return {_normalize_amount(match.group(0)) for match in _PAYMENT_AMOUNT_RE.finditer(text)}
+
+
+def _drop_if_unverifiable_payment_narrative(value: Optional[str], source_text: str) -> Optional[str]:
+    """Used only by validate_explanatory_text (summary/turkish_explanation)
+    - unlike _drop_if_unevidenced_payment_claim above (used for
+    action_summary, an INSTRUCTIONAL "what to do" field), these two are
+    DESCRIPTIVE fields, so a specific amount being verifiable in the
+    source is itself sufficient evidence - no separate "you must pay" verb
+    needs to also be present. Real production false positive from
+    requiring amount+verb here too: a CHECK24 insurance quote stating
+    "aylık prim 71,19 € öden[ecektir]" (informational - "the monthly
+    premium is €71.19") had its entire correct explanation dropped,
+    because the source is a product quote, not a bill, and so never
+    contains an explicit demand verb like "zu zahlen"/"fällig" - even
+    though the amount itself was genuinely, verifiably in the source.
+    Stating a real, source-backed number is not the same claim as
+    demanding payment of it; only an amount that does NOT appear in the
+    source (or a payment claim with no amount attached at all, e.g. "pay
+    within 15 days" with no source amount to check) is still fail-closed.
+    """
+    if not value:
+        return value
+    if not any(phrase in value.lower() for phrase in _PAYMENT_DEMAND_PHRASES_TR):
+        return value
+
+    field_amounts = _extract_amounts(value)
+    if field_amounts:
+        source_amounts = _extract_amounts(source_text)
+        if field_amounts.issubset(source_amounts):
+            return value
+        return None
+
+    if _has_payment_evidence(source_text):
+        return value
+    return None
+
+
 def _validate_payment_requested(
     payment_requested: bool,
     action_summary: Optional[str],
@@ -329,7 +386,7 @@ def validate_explanatory_text(
     source_dates = find_all_dates_in_text(text)
 
     value = _drop_if_hallucinated_date(value, source_dates)
-    value = _drop_if_unevidenced_payment_claim(value, text)
+    value = _drop_if_unverifiable_payment_narrative(value, text)
 
     return value
 

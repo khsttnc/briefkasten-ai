@@ -798,6 +798,111 @@ class OverAggressiveValidationRegressionPipelineTestCase(unittest.TestCase):
         self.assertEqual(refreshed.document_type, "Kündigung")
 
 
+class Check24InsuranceQuoteAIProvider:
+    """Stand-in for a CORRECT extraction of the real reported
+    over-correction case: a CHECK24 vehicle insurance QUOTE (not a bill)
+    whose turkish_explanation states the monthly premium as plain product
+    information, verifiable against the source, with no payment demand at
+    all (requires_action/payment_requested both false)."""
+
+    provider_name = "dummy-check24-quote"
+    model_name = "dummy-check24-quote-model"
+
+    def __init__(self):
+        self.calls = 0
+
+    def analyze_document(self, text: str) -> AIAnalysisResult:
+        self.calls += 1
+        raw_response = {
+            "document_type": "letter",
+            "language": "de",
+            "summary": "Seçilen ADAC Basis tarifesi 03.07.2026'dan itibaren aylık 71,19 € prim ile yürürlüğe girer.",
+            "turkish_explanation": (
+                "Belge, müşterinin araç bilgileri, tercihleri ve seçtiği sigorta "
+                "tarifesi hakkında bilgi verir. Seçilen sigorta ADAC Basis ile "
+                "03.07.2026 tarihinden itibaren yürürlüğe girer ve aylık 71,19 € "
+                "prim ödenecektir."
+            ),
+            "important_dates": ["03.07.2026"],
+            "extracted_entities": [],
+            "sender_category": "Unternehmen",
+            "sender_institution": "CHECK24",
+            "classified_document_type": "Information",
+            "deadline_raw_text": None,
+            "effective_date": "2026-07-03",
+            "requires_action": False,
+            "payment_requested": False,
+            "objection_right_mentioned": False,
+            "action_summary": None,
+        }
+        return AIAnalysisResult(
+            document_type=raw_response["document_type"],
+            language=raw_response["language"],
+            summary=raw_response["summary"],
+            turkish_explanation=raw_response["turkish_explanation"],
+            important_dates=raw_response["important_dates"],
+            extracted_entities=raw_response["extracted_entities"],
+            raw_response=raw_response,
+        )
+
+
+class PaymentInformationVsDemandRegressionPipelineTestCase(unittest.TestCase):
+    """End-to-end regression guard for the reported over-correction bug:
+    a CHECK24 insurance quote's correct explanation (a source-backed
+    monthly premium amount, stated as information, not a demand) was
+    dropped entirely by the old amount+verb evidence check, because a
+    quote document naturally has no "zu zahlen"/"fällig" wording - it's
+    not a bill. Uses an isolated in-memory database and temp upload
+    directory - the real backend/briefkasten.db and backend/uploads/ are
+    never touched."""
+
+    def setUp(self):
+        self.tmp_dir = Path(tempfile.mkdtemp(prefix="briefkasten_payment_info_test_"))
+        self.upload_root_patcher = patch.object(services, "UPLOAD_ROOT", self.tmp_dir.resolve())
+        self.upload_root_patcher.start()
+
+        self.engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+        Base.metadata.create_all(bind=self.engine)
+        self.SessionLocal = sessionmaker(bind=self.engine)
+        self.db = self.SessionLocal()
+        self.owner_id = _create_test_user(self.db).id
+
+    def tearDown(self):
+        self.db.close()
+        self.upload_root_patcher.stop()
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def test_informational_premium_amount_survives_validation(self):
+        pdf_bytes = _build_sample_pdf_bytes(
+            "CHECK24 Kfz-Versicherungsvergleich - Ihr Angebot\n"
+            "Gewaehlter Tarif: ADAC Basis\n"
+            "Versicherungsbeginn: 03.07.2026\n"
+            "Monatlicher Beitrag: 71,19 EUR\n"
+        )
+        document = services.save_document(
+            FakeUploadFile("CHECK24-Angebot.pdf", pdf_bytes), self.db, owner_id=self.owner_id
+        )
+        services.analyze_document_by_id(document.id, self.db, owner_id=self.owner_id)
+
+        provider = Check24InsuranceQuoteAIProvider()
+        with patch.object(services, "get_ai_provider", return_value=provider):
+            result = services.analyze_document_ai_by_id(document.id, self.db, owner_id=self.owner_id)
+
+        self.assertEqual(result["status"], "completed")
+
+        # The correct explanation must survive: it states a real,
+        # source-backed premium amount as information, not a payment
+        # demand.
+        self.assertIsNotNone(result["turkish_explanation"])
+        self.assertIn("71,19", result["turkish_explanation"])
+        self.assertIsNotNone(result["summary"])
+        self.assertEqual(result["important_dates"], ["03.07.2026"])
+
+        refreshed = self.db.query(Document).filter(Document.id == document.id).first()
+        self.assertIsNotNone(refreshed.effective_date)
+        self.assertEqual(refreshed.effective_date.date().isoformat(), "2026-07-03")
+
+
 class DocumentIntelligencePostProcessingTestCase(unittest.TestCase):
     """Verifies the Step 3 wiring: the priority/deadline engines run after a
     successful or failed AI analysis and populate Document, but can never
