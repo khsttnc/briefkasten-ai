@@ -1,12 +1,106 @@
 import { FormEvent, ReactNode, useEffect, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from '../supabaseClient';
+import { AccountDeletionPreview, deleteAccount, fetchAccountDeletionPreview } from '../api';
 
 type AuthMode = 'password' | 'magiclink';
 type PasswordAction = 'signin' | 'signup';
 
 interface AuthGateProps {
   children: ReactNode;
+}
+
+interface AccountDeletionPanelProps {
+  userEmail: string;
+  onClose: () => void;
+  onDeleted: () => void;
+}
+
+function AccountDeletionPanel({ userEmail, onClose, onDeleted }: AccountDeletionPanelProps) {
+  const [preview, setPreview] = useState<AccountDeletionPreview | null>(null);
+  const [previewError, setPreviewError] = useState('');
+  const [confirmationEmail, setConfirmationEmail] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+
+  useEffect(() => {
+    fetchAccountDeletionPreview()
+      .then(setPreview)
+      .catch((err) => setPreviewError(err instanceof Error ? err.message : 'Bilgiler yüklenemedi.'));
+  }, []);
+
+  const canSubmit = confirmationEmail.trim().toLowerCase() === userEmail.trim().toLowerCase();
+
+  const handleDelete = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!canSubmit || submitting) {
+      return;
+    }
+
+    setDeleteError('');
+    setSubmitting(true);
+    try {
+      await deleteAccount(confirmationEmail);
+      onDeleted();
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Hesap silinirken bir hata oluştu.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <section className="card">
+      <div className="card-header">
+        <h2>Hesabımı kalıcı olarak sil</h2>
+        <p>Bu işlem geri alınamaz.</p>
+      </div>
+
+      {previewError && <div className="error-banner">{previewError}</div>}
+
+      {!previewError && !preview && <div className="status-banner">Bilgiler yükleniyor...</div>}
+
+      {preview && (
+        <div className="status-banner">
+          <p>Hesabınızı sildiğinizde aşağıdakiler kalıcı olarak silinecektir:</p>
+          <ul>
+            <li>Hesap bilgileriniz ve giriş kimliğiniz</li>
+            <li>{preview.document_count} yüklenmiş belge, bunlara ait metin ve AI analiz sonuçları</li>
+            {preview.has_active_subscription && (
+              <li>
+                Aktif aboneliğiniz{preview.subscription_plan ? ` (${preview.subscription_plan})` : ''} - iptal
+                edilecektir
+              </li>
+            )}
+          </ul>
+        </div>
+      )}
+
+      <form onSubmit={handleDelete} className="auth-form">
+        <label className="auth-field">
+          <span>Onaylamak için e-posta adresinizi yazın ({userEmail})</span>
+          <input
+            type="email"
+            value={confirmationEmail}
+            onChange={(event) => setConfirmationEmail(event.target.value)}
+            className="auth-input"
+            required
+          />
+        </label>
+
+        {deleteError && <div className="error-banner">{deleteError}</div>}
+
+        <div className="form-row">
+          <button type="submit" className="secondary-button" disabled={!canSubmit || submitting}>
+            {submitting ? 'Siliniyor...' : 'Hesabı kalıcı olarak sil'}
+          </button>
+          <button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>
+            Vazgeç
+          </button>
+        </div>
+      </form>
+    </section>
+  );
 }
 
 function AuthGate({ children }: AuthGateProps) {
@@ -19,6 +113,7 @@ function AuthGate({ children }: AuthGateProps) {
   const [submitting, setSubmitting] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [error, setError] = useState('');
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -157,10 +252,25 @@ function AuthGate({ children }: AuthGateProps) {
     <>
       <div className="auth-status-bar">
         <span className="muted-text">{session.user.email}</span>
+        <button type="button" className="secondary-button" onClick={() => setShowDeleteConfirm(true)}>
+          Hesabımı sil
+        </button>
         <button type="button" className="secondary-button" onClick={handleSignOut}>
           Çıkış yap
         </button>
       </div>
+
+      {showDeleteConfirm && (
+        <AccountDeletionPanel
+          userEmail={session.user.email ?? ''}
+          onClose={() => setShowDeleteConfirm(false)}
+          onDeleted={() => {
+            setShowDeleteConfirm(false);
+            supabase.auth.signOut();
+          }}
+        />
+      )}
+
       {children}
     </>
   );

@@ -1,15 +1,17 @@
 import logging
 from typing import Optional
 
-from fastapi import Depends, FastAPI, File, Query, Request, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
 
+from .account_deletion import delete_account, get_deletion_preview
 from .auth import get_current_user
 from .billing import process_stripe_webhook
 from .config import (
@@ -168,6 +170,37 @@ def analyze_document_route(
     # Deprecated in favor of /analyze/id/{document_id} - filename is not a
     # unique key, see services.analyze_document.
     return analyze_document(filename, db, owner_id=current_user.id)
+
+
+class AccountDeletionRequest(BaseModel):
+    # Server-side check backing the frontend's "type your email to confirm"
+    # step (see CLAUDE.md: destructive actions must be confirmed) - not
+    # just a UI nicety, this is verified against the authenticated user's
+    # own email below.
+    confirmation_email: str
+
+
+@app.get("/account/deletion-preview")
+def account_deletion_preview_route(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return get_deletion_preview(current_user, db)
+
+
+@app.delete("/account")
+def delete_account_route(
+    body: AccountDeletionRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    expected_email = (current_user.email or "").strip().lower()
+    submitted_email = (body.confirmation_email or "").strip().lower()
+    if not expected_email or submitted_email != expected_email:
+        raise HTTPException(status_code=400, detail="E-posta doğrulaması başarısız.")
+
+    delete_account(current_user, db)
+    return {"status": "deleted"}
 
 
 @app.post("/webhooks/stripe")

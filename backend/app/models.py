@@ -19,7 +19,13 @@ class User(Base):
     email = Column(String, unique=True, index=True, nullable=True)
     created_at = Column(DateTime, default=_utcnow, nullable=False)
 
-    documents = relationship("Document", back_populates="owner")
+    # cascade="all, delete-orphan": account_deletion.py deletes a User row
+    # directly and relies on the ORM to remove every owned Document (which
+    # in turn cascades to its own DocumentAIAnalysis rows - see below) in
+    # the same transaction. Without this, SQLite's lack of FK enforcement
+    # here (see database.py - no "PRAGMA foreign_keys=ON") would silently
+    # leave orphaned Document rows behind instead of raising anything.
+    documents = relationship("Document", back_populates="owner", cascade="all, delete-orphan")
     subscription = relationship(
         "Subscription", back_populates="user", uselist=False, cascade="all, delete-orphan"
     )

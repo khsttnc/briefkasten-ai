@@ -71,6 +71,15 @@ DEFAULT_NVIDIA_MODEL = "nvidia/nemotron-3-nano-30b-a3b"
 # silently accept an unverifiable token.
 SUPABASE_URL_ENV = "SUPABASE_URL"
 
+# Supabase's service_role key - bypasses row-level security entirely, used
+# ONLY server-side (account_deletion.py's Admin API call to delete a user's
+# Supabase Auth identity). Must never be a VITE_-prefixed variable or a
+# frontend Docker build arg - Vite bakes VITE_ vars into the shipped JS
+# bundle, which would expose it to every browser. See frontend/.env.example
+# and docker-compose.yml's frontend build args, which deliberately only
+# pass VITE_SUPABASE_URL/VITE_SUPABASE_ANON_KEY.
+SUPABASE_SERVICE_ROLE_KEY_ENV = "SUPABASE_SERVICE_ROLE_KEY"
+
 # CORS: the single real frontend origin allowed to call this API with
 # credentials/Authorization headers - never "*" once auth is involved.
 # Defaults to the Vite dev server; production must override via env.
@@ -82,6 +91,12 @@ DEFAULT_FRONTEND_ORIGIN = "http://localhost:5173"
 # loudly (billing.py returns 503), never silently accept an unverified
 # webhook payload.
 STRIPE_WEBHOOK_SECRET_ENV = "STRIPE_WEBHOOK_SECRET"
+
+# Stripe secret API key - required for outbound calls (currently: canceling
+# a subscription during account deletion, see account_deletion.py). Not
+# used by the inbound webhook path above, which only verifies signatures
+# against STRIPE_WEBHOOK_SECRET.
+STRIPE_SECRET_KEY_ENV = "STRIPE_SECRET_KEY"
 
 # --- Rate limiting (slowapi) ---
 # Security review finding: /upload and the AI-analyze endpoint had no

@@ -8,7 +8,7 @@ import stripe
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from .config import STRIPE_WEBHOOK_SECRET_ENV
+from .config import STRIPE_SECRET_KEY_ENV, STRIPE_WEBHOOK_SECRET_ENV
 from .models import ProcessedStripeEvent, Subscription, User
 
 # Minimal event set for this phase - no product feature is gated on
@@ -30,6 +30,40 @@ def _get_webhook_secret() -> str:
             detail="Stripe webhook is not configured on this server.",
         )
     return secret
+
+
+def _get_stripe_api_key() -> str:
+    api_key = os.getenv(STRIPE_SECRET_KEY_ENV)
+    if not api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="Stripe is not configured on this server.",
+        )
+    return api_key
+
+
+def cancel_subscription_immediately(stripe_subscription_id: str) -> None:
+    """Cancels a Stripe subscription right away (not at period end) - used
+    when an account with an active paid subscription is deleted (see
+    account_deletion.py). Raises HTTPException on any failure so the caller
+    aborts the rest of account deletion instead of deleting local data while
+    the user keeps being billed.
+    """
+    stripe.api_key = _get_stripe_api_key()
+    try:
+        stripe.Subscription.delete(stripe_subscription_id)
+    except stripe.InvalidRequestError as exc:
+        # Already canceled or already gone on Stripe's side - treat as
+        # success so retrying a previously-interrupted account deletion
+        # doesn't get stuck re-canceling something that no longer exists.
+        if "No such subscription" not in str(exc):
+            raise HTTPException(
+                status_code=502, detail="Failed to cancel the Stripe subscription."
+            ) from exc
+    except stripe.StripeError as exc:
+        raise HTTPException(
+            status_code=502, detail="Failed to cancel the Stripe subscription."
+        ) from exc
 
 
 def process_stripe_webhook(payload: bytes, sig_header: str | None, db: Session) -> Dict[str, str]:

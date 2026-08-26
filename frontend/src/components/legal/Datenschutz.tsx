@@ -210,12 +210,26 @@ function Datenschutz() {
           <h2>5. Speicherdauer und Löschung</h2>
           <p>
             Ihr Benutzerkonto sowie die damit verknüpften Dokumente, extrahierten Texte und
-            KI-Analyseergebnisse verbleiben gespeichert, solange Ihr Konto besteht. Es ist
-            aktuell <strong>kein automatisierter Selbstbedienungs-Löschmechanismus</strong> für
-            Ihr Konto in der Anwendung implementiert; eine Löschung kann derzeit nur manuell
-            durch den Verantwortlichen erfolgen, z. B. auf Ihre Anfrage hin (siehe Abschnitt 7).
-            Eine Selbstbedienungsfunktion zur Kontolöschung ist in Planung; dieser Abschnitt
-            wird aktualisiert, sobald sie verfügbar ist.
+            KI-Analyseergebnisse verbleiben gespeichert, solange Ihr Konto besteht. Sie können
+            Ihr Konto jederzeit selbst und vollständig über die Funktion{' '}
+            <strong>„Hesabımı sil“ (Konto löschen)</strong> in der Anwendung löschen. Nach
+            Bestätigung (Eingabe Ihrer E-Mail-Adresse) werden unwiderruflich gelöscht:
+          </p>
+          <ul>
+            <li>alle von Ihnen hochgeladenen Dokumente und die zugehörigen Dateien,</li>
+            <li>die daraus extrahierten Texte und alle KI-Analyseergebnisse,</li>
+            <li>
+              ein bestehendes aktives Abonnement wird im selben Vorgang automatisch bei Stripe
+              gekündigt,
+            </li>
+            <li>Ihr Konto-Datensatz in der Anwendungsdatenbank sowie</li>
+            <li>Ihre Anmeldeidentität bei unserem Authentifizierungsdienstleister (Supabase).</li>
+          </ul>
+          <p>
+            Die Löschung erfolgt sofort und ist nicht rückgängig zu machen; es gibt keine
+            Wiederherstellungsmöglichkeit. Ausgenommen sind gesetzlich vorgeschriebene
+            Aufbewahrungspflichten (z. B. handels- oder steuerrechtliche Aufbewahrungsfristen für
+            Zahlungs-/Rechnungsdaten), sofern solche im Einzelfall bestehen.
           </p>
 
           <h2>6. Hosting</h2>
@@ -234,10 +248,11 @@ function Datenschutz() {
             Datenübertragbarkeit (Art. 20) sowie Widerspruch gegen die Verarbeitung (Art. 21).
           </p>
           <p>
-            Da die Anwendung aktuell noch keine automatisierte Selbstbedienungsfunktion (z. B.
-            einen Lösch-Button für Ihr Konto) für diese Rechte bietet, können entsprechende
-            Anfragen formlos per E-Mail an{' '}
-            <a href="mailto:khsttnc@gmail.com">khsttnc@gmail.com</a> gerichtet werden.
+            Ihr Recht auf Löschung (Art. 17) können Sie direkt und selbstständig über die Funktion
+            „Hesabımı sil“ (Konto löschen) in der Anwendung ausüben (siehe Abschnitt 5). Für alle
+            anderen Rechte (Auskunft, Berichtigung, Einschränkung, Datenübertragbarkeit,
+            Widerspruch) wenden Sie sich bitte formlos per E-Mail an{' '}
+            <a href="mailto:khsttnc@gmail.com">khsttnc@gmail.com</a>.
           </p>
           <p>
             Außerdem haben Sie das Recht, sich bei einer Datenschutz-Aufsichtsbehörde zu

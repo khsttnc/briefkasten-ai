@@ -152,3 +152,28 @@ export async function fetchDocuments(priority?: PriorityLevel): Promise<Document
   });
   return parseJsonResponse(response);
 }
+
+export interface AccountDeletionPreview {
+  document_count: number;
+  has_active_subscription: boolean;
+  subscription_plan: string | null;
+}
+
+export async function fetchAccountDeletionPreview(): Promise<AccountDeletionPreview> {
+  const response = await fetch(`${apiBase}/account/deletion-preview`, {
+    headers: await authHeaders(),
+  });
+  return parseJsonResponse(response);
+}
+
+export async function deleteAccount(confirmationEmail: string): Promise<{ status: string }> {
+  const response = await fetch(`${apiBase}/account`, {
+    method: 'DELETE',
+    headers: {
+      ...(await authHeaders()),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ confirmation_email: confirmationEmail }),
+  });
+  return parseJsonResponse(response);
+}
