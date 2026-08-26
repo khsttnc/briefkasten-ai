@@ -4,12 +4,29 @@ from .entity_validation import (
     MAX_ENTITIES_PER_TYPE_BEFORE_SUMMARIZING,
     MAX_EXTRACTED_ENTITIES,
     validate_extracted_entities,
+    validate_important_dates,
+    validate_intelligence_signals,
 )
 
 SOURCE_TEXT = (
     "Ihre Kfz-Versicherung AD-5409239121 (bitte stets angeben)\n"
     "Amtl. Kennzeichen: BE-ZL 37, ADAC-Mitgliedsnummer 734333034\n"
     "Sehr geehrter Herr Tuetuenue,\n"
+)
+
+# A real-shaped Kündigung (termination notice) that mentions a date and a
+# relative reporting deadline, but no payment of any kind - used across the
+# regression tests below for the exact bug class reported in production:
+# a hallucinated date substitution (2020 -> 2023) and an invented
+# payment_requested=true/"pay within 15 days" claim on a document that
+# never asks for money.
+KUENDIGUNG_TEXT = (
+    "Kündigung des Arbeitsverhältnisses\n"
+    "Berlin, den 10.01.2020\n"
+    "Sehr geehrte Frau Mustermann,\n"
+    "hiermit kündigen wir das Arbeitsverhältnis zum 28.02.2020.\n"
+    "Bitte melden Sie sich innerhalb von 3 Tagen nach Zugang dieser "
+    "Kündigung bei der Agentur für Arbeit, um eine Sperrzeit zu vermeiden.\n"
 )
 
 
@@ -182,6 +199,149 @@ class EntityCountCapTestCase(unittest.TestCase):
         result = validate_extracted_entities(few + many_other_single_types, None)
         vehicle_entries = [e for e in result if e["type"] == "vehicle_reference"]
         self.assertEqual(len(vehicle_entries), 3)
+
+
+class DateTypedExtractedEntityTestCase(unittest.TestCase):
+    """extracted_entities date values (see _is_date_type) must be checked
+    against the source the same way code/number entities are - not
+    currently produced by the extraction prompt, but not silently exempt
+    either if it ever is."""
+
+    def test_date_matching_source_is_accepted(self):
+        entities = [{"type": "important_date", "value": "10.01.2020"}]
+        self.assertEqual(validate_extracted_entities(entities, KUENDIGUNG_TEXT), entities)
+
+    def test_date_not_in_source_is_rejected(self):
+        # The exact reported production bug: the model copies a source date
+        # (2020) as a different year (2023) that never appears in the text.
+        entities = [{"type": "important_date", "value": "10.01.2023"}]
+        self.assertEqual(validate_extracted_entities(entities, KUENDIGUNG_TEXT), [])
+
+    def test_unparseable_date_value_is_rejected(self):
+        entities = [{"type": "important_date", "value": "irgendwann"}]
+        self.assertEqual(validate_extracted_entities(entities, KUENDIGUNG_TEXT), [])
+
+
+class ImportantDatesValidationTestCase(unittest.TestCase):
+    def test_date_present_in_source_is_kept(self):
+        result = validate_important_dates(["10.01.2020"], KUENDIGUNG_TEXT)
+        self.assertEqual(result, ["10.01.2020"])
+
+    def test_hallucinated_year_is_dropped(self):
+        result = validate_important_dates(["10.01.2023"], KUENDIGUNG_TEXT)
+        self.assertEqual(result, [])
+
+    def test_iso_date_matching_source_is_kept(self):
+        result = validate_important_dates(["2020-02-28"], KUENDIGUNG_TEXT)
+        self.assertEqual(result, ["2020-02-28"])
+
+    def test_entry_without_any_parseable_date_is_kept(self):
+        # Nothing to verify - not the class of bug this guards against.
+        result = validate_important_dates(["unbestimmter Zeitpunkt"], KUENDIGUNG_TEXT)
+        self.assertEqual(result, ["unbestimmter Zeitpunkt"])
+
+    def test_none_and_empty_return_empty_list(self):
+        self.assertEqual(validate_important_dates(None, KUENDIGUNG_TEXT), [])
+        self.assertEqual(validate_important_dates([], KUENDIGUNG_TEXT), [])
+
+
+class IntelligenceSignalDateValidationTestCase(unittest.TestCase):
+    """Regression guard for the reported production bug: a date on the
+    source document (2020) coming back from the model as a different,
+    non-existent year (2023) in document_date/effective_date/
+    deadline_raw_text - none of these were checked against the source text
+    at all before validate_intelligence_signals existed."""
+
+    def test_document_date_matching_source_is_kept(self):
+        raw = {"document_date": "2020-01-10"}
+        result = validate_intelligence_signals(raw, KUENDIGUNG_TEXT)
+        self.assertEqual(result["document_date"], "2020-01-10")
+
+    def test_document_date_with_hallucinated_year_is_dropped(self):
+        raw = {"document_date": "2023-01-10"}
+        result = validate_intelligence_signals(raw, KUENDIGUNG_TEXT)
+        self.assertIsNone(result["document_date"])
+
+    def test_effective_date_with_hallucinated_year_is_dropped(self):
+        raw = {"effective_date": "2023-02-28"}
+        result = validate_intelligence_signals(raw, KUENDIGUNG_TEXT)
+        self.assertIsNone(result["effective_date"])
+
+    def test_effective_date_matching_source_is_kept(self):
+        raw = {"effective_date": "2020-02-28"}
+        result = validate_intelligence_signals(raw, KUENDIGUNG_TEXT)
+        self.assertEqual(result["effective_date"], "2020-02-28")
+
+    def test_deadline_raw_text_with_absolute_date_not_in_source_is_dropped(self):
+        raw = {"deadline_raw_text": "bis zum 15.09.2026"}
+        result = validate_intelligence_signals(raw, KUENDIGUNG_TEXT)
+        self.assertIsNone(result["deadline_raw_text"])
+
+    def test_deadline_raw_text_with_absolute_date_in_source_is_kept(self):
+        raw = {"deadline_raw_text": "zum 28.02.2020"}
+        result = validate_intelligence_signals(raw, KUENDIGUNG_TEXT)
+        self.assertEqual(result["deadline_raw_text"], "zum 28.02.2020")
+
+    def test_relative_deadline_phrase_has_no_date_to_verify_and_is_kept(self):
+        raw = {"deadline_raw_text": "innerhalb von 3 Tagen nach Zugang dieser Kündigung"}
+        result = validate_intelligence_signals(raw, KUENDIGUNG_TEXT)
+        self.assertEqual(
+            result["deadline_raw_text"], "innerhalb von 3 Tagen nach Zugang dieser Kündigung"
+        )
+
+    def test_non_dict_raw_response_passes_through(self):
+        self.assertEqual(validate_intelligence_signals("not a dict", KUENDIGUNG_TEXT), {})
+        self.assertEqual(validate_intelligence_signals(None, KUENDIGUNG_TEXT), {})
+
+
+class PaymentRequestedValidationTestCase(unittest.TestCase):
+    """Regression guard for the reported production bug: payment_requested
+    coming back true, with an action_summary telling the reader to
+    "pay within 15 days", on a document (a plain Kündigung) that never
+    mentions any payment at all."""
+
+    def test_payment_requested_without_any_evidence_is_downgraded_to_false(self):
+        raw = {
+            "payment_requested": True,
+            "action_summary": "15 gün içinde ödeyin.",
+        }
+        result = validate_intelligence_signals(raw, KUENDIGUNG_TEXT)
+        self.assertFalse(result["payment_requested"])
+
+    def test_action_summary_is_cleared_when_payment_claim_is_dropped(self):
+        raw = {
+            "payment_requested": True,
+            "action_summary": "15 gün içinde ödeyin.",
+        }
+        result = validate_intelligence_signals(raw, KUENDIGUNG_TEXT)
+        self.assertIsNone(result["action_summary"])
+
+    def test_action_summary_without_payment_wording_is_kept_even_when_downgraded(self):
+        raw = {
+            "payment_requested": True,
+            "action_summary": "Bitte fristgerecht bei der Agentur für Arbeit melden.",
+        }
+        result = validate_intelligence_signals(raw, KUENDIGUNG_TEXT)
+        self.assertFalse(result["payment_requested"])
+        self.assertEqual(
+            result["action_summary"], "Bitte fristgerecht bei der Agentur für Arbeit melden."
+        )
+
+    def test_payment_requested_with_textual_evidence_is_kept(self):
+        text_with_payment = KUENDIGUNG_TEXT + "Der ausstehende Betrag ist zu zahlen.\n"
+        raw = {
+            "payment_requested": True,
+            "action_summary": "Ödemeyi yapın.",
+        }
+        result = validate_intelligence_signals(raw, text_with_payment)
+        self.assertTrue(result["payment_requested"])
+        self.assertEqual(result["action_summary"], "Ödemeyi yapın.")
+
+    def test_payment_requested_false_is_left_untouched(self):
+        raw = {"payment_requested": False, "action_summary": "Fristgerecht melden."}
+        result = validate_intelligence_signals(raw, KUENDIGUNG_TEXT)
+        self.assertFalse(result["payment_requested"])
+        self.assertEqual(result["action_summary"], "Fristgerecht melden.")
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Optional
+from typing import Optional, Set
 
 # --- Zustellfiktion (deemed-delivery) ---------------------------------
 # A written German administrative decision (Verwaltungsakt) sent by post is
@@ -119,7 +119,11 @@ def _resolve_amount(amount_raw: str) -> int:
     return int(amount_raw)
 
 
-def _parse_absolute_date(text: str) -> Optional[date]:
+def parse_absolute_date(text: str) -> Optional[date]:
+    """First absolute date found in text (DD.MM.YYYY or written German
+    form), or None. Public so entity_validation.py can extract the date a
+    deadline_raw_text phrase claims, to verify it against the source
+    document independently of deadline resolution itself."""
     match = _ABSOLUTE_NUMERIC_RE.search(text)
     if match:
         day, month, year = (int(g) for g in match.groups())
@@ -139,6 +143,34 @@ def _parse_absolute_date(text: str) -> Optional[date]:
             return None
 
     return None
+
+
+def find_all_dates_in_text(text: str) -> Set[date]:
+    """Every absolute calendar date (DD.MM.YYYY or written German form)
+    found anywhere in text, as a set of date objects. Not used by deadline
+    resolution itself (which only looks at deadline_raw_text) - this exists
+    for entity_validation.py to check whether an LLM-extracted date
+    actually appears in the source document, regardless of where in the
+    text it appears or how it's formatted."""
+    found: Set[date] = set()
+
+    for match in _ABSOLUTE_NUMERIC_RE.finditer(text):
+        day, month, year = (int(g) for g in match.groups())
+        try:
+            found.add(date(year, month, day))
+        except ValueError:
+            continue
+
+    for match in _ABSOLUTE_WRITTEN_RE.finditer(text):
+        day = int(match.group(1))
+        month = _GERMAN_MONTHS[match.group(2).lower()]
+        year = int(match.group(3))
+        try:
+            found.add(date(year, month, day))
+        except ValueError:
+            continue
+
+    return found
 
 
 def _parse_relative_duration_days(text: str) -> Optional[int]:
@@ -217,7 +249,7 @@ def _resolve_single_deadline(
             deadline_estimated_date=None,
         )
 
-    absolute_date = _parse_absolute_date(text)
+    absolute_date = parse_absolute_date(text)
     if absolute_date is not None:
         return DeadlineResult(
             deadline_raw_text=deadline_raw_text,

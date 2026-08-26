@@ -23,7 +23,11 @@ pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
 
 from .ai_service import AIService
 from .document_intelligence import derive_intelligence_fields, normalize_language_label
-from .entity_validation import validate_extracted_entities
+from .entity_validation import (
+    validate_extracted_entities,
+    validate_important_dates,
+    validate_intelligence_signals,
+)
 from .models import Document, DocumentAIAnalysis
 from .priority_engine import LEVEL_ORDER
 from .providers.provider_factory import get_ai_provider
@@ -410,11 +414,14 @@ def analyze_document_ai_by_id(
     orchestrator = DocumentProcessingOrchestrator(provider)
     analysis_result = orchestrator.run(document.text or "")
 
-    # Deterministic safety net: drop any code/number entity whose value
+    # Deterministic safety net: drop any code/number/date entity whose value
     # cannot be verified against the source text, before it is persisted or
     # returned. See entity_validation.py for the verification rules.
     analysis_result.extracted_entities = validate_extracted_entities(
         analysis_result.extracted_entities, document.text or ""
+    )
+    analysis_result.important_dates = validate_important_dates(
+        analysis_result.important_dates, document.text or ""
     )
 
     status = "failed" if analysis_result.error_message else "completed"
@@ -448,8 +455,14 @@ def analyze_document_ai_by_id(
     # failed LLM analysis, and a DB error here is swallowed too, so the AI
     # analysis result computed above is still returned/raised normally.
     try:
+        # raw_response is persisted above unmodified (true audit trail of
+        # what the LLM returned); the deterministic engines only ever see
+        # this separately verified copy, so a hallucinated date or invented
+        # payment demand cannot reach deadline_engine/priority_engine or
+        # the reader - see entity_validation.validate_intelligence_signals.
+        verified_signals = validate_intelligence_signals(raw_response, document.text or "")
         text_truncated = is_text_truncated_for_analysis(document.character_count)
-        intelligence_fields = derive_intelligence_fields(raw_response, text_truncated=text_truncated)
+        intelligence_fields = derive_intelligence_fields(verified_signals, text_truncated=text_truncated)
         for field_name, field_value in intelligence_fields.items():
             setattr(document, field_name, field_value)
         db.add(document)

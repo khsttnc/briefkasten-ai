@@ -231,7 +231,18 @@ class DuplicateAIAnalysisPreventionTestCase(unittest.TestCase):
         # derive_intelligence_fields, rather than a real 200-page PDF -
         # document_processing.py's own truncation logic is unit-tested
         # separately in test_processing.py.
-        document = self._upload_and_extract()
+        #
+        # Uses its own fixture (not the shared _upload_and_extract text)
+        # because the deadline date asserted below must actually appear in
+        # the document text - entity_validation.validate_intelligence_signals
+        # now drops any deadline_raw_text whose date isn't verifiable
+        # against the source, so a mismatched fixture would (correctly)
+        # zero out the deadline this test asserts on.
+        pdf_bytes = _build_sample_pdf_bytes("Bescheid Nr. 456 fuer Test GmbH, bis zum 15.09.2026")
+        upload = FakeUploadFile("Bescheid.pdf", pdf_bytes)
+        document = services.save_document(upload, self.db, owner_id=self.owner_id)
+        services.analyze_document_by_id(document.id, self.db, owner_id=self.owner_id)
+        document = self.db.query(Document).filter(Document.id == document.id).first()
         document.character_count = 600_000
         self.db.add(document)
         self.db.commit()
@@ -447,6 +458,127 @@ class EntityValidationPipelineIntegrationTestCase(unittest.TestCase):
         self.assertEqual(json.loads(stored.extracted_entities), expected_entities)
 
 
+class HallucinatedSignalAIProvider:
+    """Stand-in AI provider mimicking the exact production bug reported: a
+    Kündigung whose printed date (10.01.2020) comes back as a different,
+    non-existent year (2023), and payment_requested=true with a "pay within
+    15 days" action_summary on a document that never mentions any payment
+    at all."""
+
+    provider_name = "dummy-hallucinated-signals"
+    model_name = "dummy-hallucinated-signals-model"
+
+    def __init__(self):
+        self.calls = 0
+
+    def analyze_document(self, text: str) -> AIAnalysisResult:
+        self.calls += 1
+        raw_response = {
+            "document_type": "letter",
+            "language": "de",
+            "summary": "Kündigung des Arbeitsverhältnisses.",
+            "turkish_explanation": "İş sözleşmesi feshedildi.",
+            "important_dates": ["10.01.2023"],
+            "extracted_entities": [],
+            "sender_category": "Unternehmen",
+            "classified_document_type": "Kündigung",
+            "deadline_raw_text": "innerhalb von 3 Tagen nach Zugang dieser Kündigung",
+            "document_date": "2023-01-10",
+            "effective_date": "2023-02-28",
+            "requires_action": True,
+            "payment_requested": True,
+            "objection_right_mentioned": False,
+            "action_summary": "15 gün içinde ödeyin.",
+        }
+        return AIAnalysisResult(
+            document_type="letter",
+            language="de",
+            summary=raw_response["summary"],
+            turkish_explanation=raw_response["turkish_explanation"],
+            important_dates=raw_response["important_dates"],
+            extracted_entities=[],
+            raw_response=raw_response,
+        )
+
+
+class HallucinatedSignalPipelineTestCase(unittest.TestCase):
+    """Regression guard for the reported production bug: a hallucinated
+    date substitution (2020 -> 2023) and a fabricated payment demand must
+    both be caught end-to-end - dropped from the Document row the API
+    response is built from, and from the persisted important_dates - not
+    just at the unit level. Uses an isolated in-memory database and temp
+    upload directory - the real backend/briefkasten.db and backend/uploads/
+    are never touched."""
+
+    def setUp(self):
+        self.tmp_dir = Path(tempfile.mkdtemp(prefix="briefkasten_hallucination_test_"))
+        self.upload_root_patcher = patch.object(services, "UPLOAD_ROOT", self.tmp_dir.resolve())
+        self.upload_root_patcher.start()
+
+        self.engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+        Base.metadata.create_all(bind=self.engine)
+        self.SessionLocal = sessionmaker(bind=self.engine)
+        self.db = self.SessionLocal()
+        self.owner_id = _create_test_user(self.db).id
+
+    def tearDown(self):
+        self.db.close()
+        self.upload_root_patcher.stop()
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def test_hallucinated_date_and_payment_claim_are_dropped(self):
+        pdf_bytes = _build_sample_pdf_bytes(
+            "Kündigung des Arbeitsverhältnisses\n"
+            "Berlin, den 10.01.2020\n"
+            "hiermit kündigen wir das Arbeitsverhältnis zum 28.02.2020.\n"
+            "Bitte melden Sie sich innerhalb von 3 Tagen nach Zugang dieser "
+            "Kündigung bei der Agentur für Arbeit.\n"
+        )
+        document = services.save_document(
+            FakeUploadFile("Kuendigung.pdf", pdf_bytes), self.db, owner_id=self.owner_id
+        )
+        services.analyze_document_by_id(document.id, self.db, owner_id=self.owner_id)
+
+        provider = HallucinatedSignalAIProvider()
+        with patch.object(services, "get_ai_provider", return_value=provider):
+            result = services.analyze_document_ai_by_id(document.id, self.db, owner_id=self.owner_id)
+
+        self.assertEqual(result["status"], "completed")
+
+        # important_dates: the hallucinated 2023 date must not survive.
+        self.assertEqual(result["important_dates"], [])
+
+        refreshed = self.db.query(Document).filter(Document.id == document.id).first()
+
+        # document_date is dropped (hallucinated year) before it ever
+        # reaches resolve_deadline() - it isn't a Document column itself,
+        # but its absence is observable here: the relative deadline can no
+        # longer be resolved and falls back to unknown_needs_review rather
+        # than a confidently wrong date. effective_date's hallucinated year
+        # is dropped the same way and is a Document column directly.
+        self.assertIsNone(refreshed.effective_date)
+        self.assertEqual(refreshed.deadline_certainty, "unknown_needs_review")
+        self.assertIsNone(refreshed.deadline_estimated_date)
+
+        # payment_requested had no textual evidence anywhere in the source
+        # -> downgraded to false, and the fabricated "pay within 15 days"
+        # action_summary must not reach the reader.
+        self.assertNotIn("Zahlungsaufforderung", refreshed.priority_reasoning)
+        self.assertIsNone(refreshed.action_summary)
+
+        # The persisted raw_response stays the true, unmodified audit trail
+        # of what the LLM actually returned - only the values fed into the
+        # deterministic engines are verified/scrubbed, not the DB record.
+        stored = (
+            self.db.query(DocumentAIAnalysis)
+            .filter(DocumentAIAnalysis.document_id == document.id)
+            .one()
+        )
+        stored_raw_response = json.loads(stored.raw_response)
+        self.assertEqual(stored_raw_response["document_date"], "2023-01-10")
+        self.assertTrue(stored_raw_response["payment_requested"])
+
+
 class DocumentIntelligencePostProcessingTestCase(unittest.TestCase):
     """Verifies the Step 3 wiring: the priority/deadline engines run after a
     successful or failed AI analysis and populate Document, but can never
@@ -605,7 +737,15 @@ class DocumentIntelligenceFullSignalPipelineTestCase(unittest.TestCase):
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
     def test_full_jobcenter_signals_produce_expected_classification(self):
-        pdf_bytes = _build_sample_pdf_bytes("Aenderungsbescheid Jobcenter Berlin Mitte")
+        # Includes the document_date (10.01.2026, matching the provider's
+        # document_date="2026-01-10" below) in the fixture text itself -
+        # entity_validation.validate_intelligence_signals now drops any
+        # document_date/deadline that isn't verifiable against the source,
+        # and a dropped document_date would make the relative deadline
+        # below unresolvable (falls back to unknown_needs_review).
+        pdf_bytes = _build_sample_pdf_bytes(
+            "Aenderungsbescheid Jobcenter Berlin Mitte vom 10.01.2026"
+        )
         document = services.save_document(
             FakeUploadFile("Aenderungsbescheid.pdf", pdf_bytes), self.db, owner_id=self.owner_id
         )
