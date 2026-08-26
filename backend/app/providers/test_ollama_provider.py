@@ -207,6 +207,23 @@ class TestBuildOllamaPrompt(unittest.TestCase):
         self.assertNotIn("TURKISH", classification_prompt)
         self.assertNotIn("TURKISH", extraction_prompt)
 
+    def test_default_prompt_forbids_leaking_boolean_signals_into_explanation(self):
+        # Regression guard for a real production output: turkish_explanation
+        # contained garbled sentences like "Odeme talebi edilmez" (no payment
+        # requested) and "Coklu son verisi bulunmamaktadir" (no multiple
+        # deadlines) - the model was narrating the boolean signal fields
+        # instead of just describing the document. The default prompt is the
+        # only one that requests both turkish_explanation and the signal
+        # keys together (see DocumentIntelligenceSignalKeysTestCase above),
+        # so it's the only one that needs this instruction.
+        prompt = _build_ollama_prompt("Some German document text", task=None)
+
+        self.assertIn(document_intelligence.PAYMENT_REQUESTED_KEY, prompt)
+        self.assertIn(document_intelligence.OBJECTION_RIGHT_KEY, prompt)
+        self.assertIn(document_intelligence.MULTIPLE_DEADLINES_DETECTED_KEY, prompt)
+        self.assertIn("must NEVER mention, name, or restate", prompt)
+        self.assertIn("does not apply", prompt)
+
 
 class DocumentIntelligenceSignalKeysTestCase(unittest.TestCase):
     """Regression guard for the exact failure mode flagged during review: a

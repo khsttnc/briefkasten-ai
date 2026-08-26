@@ -2,7 +2,7 @@ import unittest
 from datetime import date
 from unittest.mock import patch
 
-from .document_intelligence import derive_intelligence_fields
+from .document_intelligence import derive_intelligence_fields, normalize_language_label
 
 
 class MissingOrEmptyInputTestCase(unittest.TestCase):
@@ -253,6 +253,25 @@ class EngineFailureIsolationTestCase(unittest.TestCase):
             fields = derive_intelligence_fields({"deadline_raw_text": "bis zum 15.09.2026"})
         self.assertEqual(fields["deadline_type"], "none")
         self.assertEqual(fields["priority_level"], "low")
+
+
+class NormalizeLanguageLabelTestCase(unittest.TestCase):
+    """The LLM's raw 'language' value has been observed to drift between
+    "German", "Deutsch", and "de" across providers/re-analyses of the same
+    document - normalize_language_label must collapse all of them to a
+    single Turkish display label."""
+
+    def test_known_german_synonyms_normalize_regardless_of_case(self):
+        for raw in ("German", "german", "Deutsch", "deutsch", "de", "DE", "  German  "):
+            with self.subTest(raw=raw):
+                self.assertEqual(normalize_language_label(raw), "Almanca")
+
+    def test_unrecognized_value_passes_through_unchanged(self):
+        self.assertEqual(normalize_language_label("English"), "English")
+
+    def test_none_and_empty_pass_through_unchanged(self):
+        self.assertIsNone(normalize_language_label(None))
+        self.assertEqual(normalize_language_label(""), "")
 
 
 if __name__ == "__main__":

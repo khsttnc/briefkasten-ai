@@ -271,7 +271,9 @@ class DuplicateAIAnalysisPreventionTestCase(unittest.TestCase):
 
         self.assertEqual(dummy_provider.calls, 1)
         self.assertEqual(cached_result["document_type"], "letter")
-        self.assertEqual(cached_result["language"], "de")
+        # "de" is normalized to the Turkish display label - see
+        # document_intelligence.normalize_language_label.
+        self.assertEqual(cached_result["language"], "Almanca")
         self.assertEqual(cached_result["summary"], "Test summary")
         self.assertEqual(cached_result["turkish_explanation"], "Test aciklama")
         self.assertEqual(cached_result["important_dates"], ["2026-01-01"])

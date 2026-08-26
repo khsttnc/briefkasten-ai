@@ -22,7 +22,7 @@ from .config import (
 pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
 
 from .ai_service import AIService
-from .document_intelligence import derive_intelligence_fields
+from .document_intelligence import derive_intelligence_fields, normalize_language_label
 from .entity_validation import validate_extracted_entities
 from .models import Document, DocumentAIAnalysis
 from .priority_engine import LEVEL_ORDER
@@ -333,7 +333,7 @@ def _serialize_completed_analysis(analysis: DocumentAIAnalysis, document: Docume
         "model": analysis.model,
         "status": analysis.status,
         "document_type": analysis.document_type,
-        "language": analysis.language,
+        "language": normalize_language_label(analysis.language),
         "summary": analysis.summary,
         "turkish_explanation": analysis.turkish_explanation,
         "important_dates": json.loads(analysis.important_dates) if analysis.important_dates else [],
@@ -464,7 +464,7 @@ def analyze_document_ai_by_id(
         "model": analysis_record.model,
         "status": analysis_record.status,
         "document_type": analysis_record.document_type,
-        "language": analysis_record.language,
+        "language": normalize_language_label(analysis_record.language),
         "summary": analysis_record.summary,
         "turkish_explanation": analysis_record.turkish_explanation,
         "important_dates": analysis_result.important_dates or [],

@@ -100,6 +100,32 @@ _MULTIPLE_DEADLINES_ACTION_SUMMARY_BY_LANGUAGE = {
 }
 
 
+# Raw "language" values actually observed coming back from the LLM for the
+# same kind of German document, across providers/models/re-analyses:
+# "German", "Deutsch", "de". The app only ever processes German documents
+# (see CLAUDE.md), so this field is never really in doubt - only its
+# spelling is inconsistent. Normalized to a single Turkish display label so
+# the UI doesn't flicker between spellings depending on which provider/model
+# happened to answer.
+_GERMAN_LANGUAGE_LABELS = {"german", "deutsch", "de", "deu", "germany"}
+DISPLAY_LANGUAGE_GERMAN = "Almanca"
+
+
+def normalize_language_label(value: Optional[str]) -> Optional[str]:
+    """Maps a raw LLM-reported document language to its Turkish display label.
+
+    Whatever the LLM returns for a recognized German synonym (any casing)
+    becomes "Almanca". An unrecognized value is passed through unchanged
+    rather than guessed at - this only fixes known inconsistency, it does
+    not invent a translation for a language never seen in practice.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return value
+    if value.strip().lower() in _GERMAN_LANGUAGE_LABELS:
+        return DISPLAY_LANGUAGE_GERMAN
+    return value
+
+
 def _multiple_deadlines_action_summary() -> str:
     return _MULTIPLE_DEADLINES_ACTION_SUMMARY_BY_LANGUAGE.get(
         OUTPUT_LANGUAGE_NAME,
