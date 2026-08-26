@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import '@testing-library/jest-dom';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App from './App';
 import * as api from './api';
@@ -59,6 +59,10 @@ describe('AI analyze request handling', () => {
     mockedApi.fetchDocumentsSummary.mockReset();
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   test('a successful response clears the loading state and shows the result', async () => {
     mockedApi.analyzeDocumentAIById.mockResolvedValue({
       analysis_id: 1,
@@ -105,5 +109,28 @@ describe('AI analyze request handling', () => {
     ).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText('AI ile analiz et')).not.toBeDisabled());
     expect(screen.queryByText(/çalışıyor/)).not.toBeInTheDocument();
+  });
+
+  test('shows an honest elapsed-time counter instead of a fake progress bar while waiting', async () => {
+    // Never resolves within the test - only what happens while it's
+    // pending is under test here, not the eventual outcome.
+    mockedApi.analyzeDocumentAIById.mockImplementation(() => new Promise(() => {}));
+
+    // Upload with real timers first (userEvent's own internals rely on
+    // real timer-based delays) - fake timers are only switched on right
+    // before the AI-analyze click, using fireEvent (synchronous, no
+    // internal timer dependency) instead of userEvent for that one
+    // interaction so it doesn't deadlock against the fake clock.
+    await uploadAndReachAnalyzeButton();
+    await screen.findByText('AI ile analiz et');
+
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByText('AI ile analiz et'));
+
+    expect(screen.queryByText(/saniyedir bekleniyor/)).not.toBeInTheDocument();
+
+    await vi.advanceTimersByTimeAsync(12_000);
+
+    expect(screen.getByText(/12 saniyedir bekleniyor/)).toBeInTheDocument();
   });
 });

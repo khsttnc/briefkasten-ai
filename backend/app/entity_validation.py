@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from datetime import date
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -13,6 +14,18 @@ from .document_intelligence import (
     OUTPUT_LANGUAGE_NAME,
     PAYMENT_REQUESTED_KEY,
 )
+
+# Deliberately logged (not silently dropped) at WARNING - the default level
+# that shows up in `docker compose logs backend` with no extra
+# configuration needed (see main.py's "briefkasten" logger, which never
+# calls logging.basicConfig - the root logger's own WARNING-level default
+# applies). Real production cost of the alternative: three separate
+# incidents where a field came back empty/wrong and diagnosing which rule
+# caught it required pulling the raw AI response straight out of the
+# database by hand each time. Every log line below names only the field
+# and the rule that fired - never the field's actual (possibly
+# user-document-derived) content.
+logger = logging.getLogger("briefkasten.entity_validation")
 
 # Hard backend cap on the number of entities returned, independent of
 # whatever the prompt asked the LLM for - a document with many distinct
@@ -136,6 +149,7 @@ def validate_extracted_entities(
     source_dates = find_all_dates_in_text(text)
 
     validated: List[Dict[str, Any]] = []
+    dropped = 0
     for entity in entities:
         if not isinstance(entity, dict):
             continue
@@ -143,24 +157,32 @@ def validate_extracted_entities(
         entity_type = entity.get("type")
         type_key = entity_type.strip().lower() if isinstance(entity_type, str) else None
         value = entity.get("value")
+        verifiable = True
 
         if type_key in _STRICT_EXACT_TYPES:
-            if not _is_verifiable_value(value) or value not in text:
-                continue
+            verifiable = _is_verifiable_value(value) and value in text
         elif type_key in _FORMAT_TOLERANT_TYPES:
             if not _is_verifiable_value(value):
-                continue
-            normalized_value = _normalize_alnum(value)
-            if not normalized_value or normalized_value not in normalized_text:
-                continue
+                verifiable = False
+            else:
+                normalized_value = _normalize_alnum(value)
+                verifiable = bool(normalized_value) and normalized_value in normalized_text
         elif _is_date_type(type_key):
             if not _is_verifiable_value(value):
-                continue
-            parsed = parse_absolute_date(value)
-            if parsed is None or parsed not in source_dates:
-                continue
+                verifiable = False
+            else:
+                parsed = parse_absolute_date(value)
+                verifiable = parsed is not None and parsed in source_dates
 
-        validated.append(entity)
+        if verifiable:
+            validated.append(entity)
+        else:
+            dropped += 1
+
+    if dropped:
+        logger.warning(
+            "validation: extracted_entities dropped %d/%d (not_in_source)", dropped, len(entities)
+        )
 
     return _collapse_and_cap_entities(validated)
 
@@ -193,6 +215,13 @@ def validate_important_dates(
         if entry_dates and not entry_dates.issubset(source_dates):
             continue
         validated.append(entry)
+
+    if len(validated) != len(important_dates):
+        logger.warning(
+            "validation: important_dates filtered %d -> %d (dates_not_in_source)",
+            len(important_dates),
+            len(validated),
+        )
 
     return validated
 
@@ -254,22 +283,27 @@ def _has_payment_evidence(source_text: str) -> bool:
     return has_amount and has_action_verb
 
 
-def _drop_if_hallucinated_date(value: Optional[str], source_dates: Set[date]) -> Optional[str]:
-    """None/empty in, None out. Otherwise drops value entirely (not a
-    partial edit - see the fail-closed rationale repeated throughout this
+def _drop_if_hallucinated_date(
+    value: Optional[str], source_dates: Set[date]
+) -> Tuple[Optional[str], Optional[str]]:
+    """None/empty in, (None, None) out. Otherwise drops value entirely (not
+    a partial edit - see the fail-closed rationale repeated throughout this
     module) if it contains an absolute date not found anywhere in the
-    source text."""
+    source text, returning (None, reason) so the caller can log which rule
+    fired. Returns (value, None) when kept."""
     if not _is_verifiable_value(value):
-        return None
+        return None, None
     field_dates = find_all_dates_in_text(value)
     if field_dates and not field_dates.issubset(source_dates):
-        return None
-    return value
+        return None, "hallucinated_date"
+    return value, None
 
 
-def _drop_if_unevidenced_payment_claim(value: Optional[str], source_text: str) -> Optional[str]:
+def _drop_if_unevidenced_payment_claim(
+    value: Optional[str], source_text: str
+) -> Tuple[Optional[str], Optional[str]]:
     if not value:
-        return value
+        return value, None
     if any(
         phrase in value.lower() for phrase in _PAYMENT_DEMAND_PHRASES_TR
     ) and not _has_payment_evidence(source_text):
@@ -278,8 +312,8 @@ def _drop_if_unevidenced_payment_claim(value: Optional[str], source_text: str) -
         # grammatically broken or still-misleading remainder. Dropping the
         # whole (now partly fabricated) field is the same fail-closed
         # choice already made for individual entities above.
-        return None
-    return value
+        return None, "unevidenced_payment_claim"
+    return value, None
 
 
 def _normalize_amount(raw: str) -> str:
@@ -304,7 +338,9 @@ def _extract_amounts(text: str) -> Set[str]:
     return {_normalize_amount(match.group(0)) for match in _PAYMENT_AMOUNT_RE.finditer(text)}
 
 
-def _drop_if_unverifiable_payment_narrative(value: Optional[str], source_text: str) -> Optional[str]:
+def _drop_if_unverifiable_payment_narrative(
+    value: Optional[str], source_text: str
+) -> Tuple[Optional[str], Optional[str]]:
     """Used only by validate_explanatory_text (summary/turkish_explanation)
     - unlike _drop_if_unevidenced_payment_claim above (used for
     action_summary, an INSTRUCTIONAL "what to do" field), these two are
@@ -323,20 +359,20 @@ def _drop_if_unverifiable_payment_narrative(value: Optional[str], source_text: s
     within 15 days" with no source amount to check) is still fail-closed.
     """
     if not value:
-        return value
+        return value, None
     if not any(phrase in value.lower() for phrase in _PAYMENT_DEMAND_PHRASES_TR):
-        return value
+        return value, None
 
     field_amounts = _extract_amounts(value)
     if field_amounts:
         source_amounts = _extract_amounts(source_text)
         if field_amounts.issubset(source_amounts):
-            return value
-        return None
+            return value, None
+        return None, "unverified_amount"
 
     if _has_payment_evidence(source_text):
-        return value
-    return None
+        return value, None
+    return None, "unevidenced_payment_claim"
 
 
 def _validate_payment_requested(
@@ -353,7 +389,10 @@ def _validate_payment_requested(
     # No textual evidence anywhere in the source for a payment demand -
     # fail closed rather than surface a fabricated "pay within N days"
     # claim to the reader.
-    action_summary = _drop_if_unevidenced_payment_claim(action_summary, source_text)
+    logger.warning("validation: payment_requested downgraded true->false (unevidenced_payment_demand)")
+    action_summary, reason = _drop_if_unevidenced_payment_claim(action_summary, source_text)
+    if reason:
+        logger.warning("validation: action_summary dropped (%s)", reason)
 
     return False, action_summary
 
@@ -361,6 +400,7 @@ def _validate_payment_requested(
 def validate_explanatory_text(
     value: Any,
     source_text: Optional[str],
+    field_name: str = "explanatory_text",
 ) -> Optional[str]:
     """Fail-closed verification for summary/turkish_explanation - the two
     free-form LLM fields never covered by validate_intelligence_signals.
@@ -378,6 +418,11 @@ def validate_explanatory_text(
     turkish_explanation - payment_requested itself was never even involved.
     Kept as a backstop even now that Claude is wired in too: a future
     provider or prompt regression could reintroduce the same gap.
+
+    field_name is used only for logging (which field got dropped and why -
+    see the module-level logger comment) - callers pass "summary" /
+    "turkish_explanation" so the two are distinguishable in the logs,
+    since both go through this exact same function.
     """
     if not isinstance(value, str) or not value.strip():
         return None
@@ -385,36 +430,47 @@ def validate_explanatory_text(
     text = source_text or ""
     source_dates = find_all_dates_in_text(text)
 
-    value = _drop_if_hallucinated_date(value, source_dates)
-    value = _drop_if_unverifiable_payment_narrative(value, text)
+    value, reason = _drop_if_hallucinated_date(value, source_dates)
+    if reason:
+        logger.warning("validation: %s dropped (%s)", field_name, reason)
+        return None
+
+    value, reason = _drop_if_unverifiable_payment_narrative(value, text)
+    if reason:
+        logger.warning("validation: %s dropped (%s)", field_name, reason)
+        return None
 
     return value
 
 
-def _validate_date_string(value: Any, source_dates: Set[date]) -> Optional[str]:
+def _validate_date_string(
+    value: Any, source_dates: Set[date]
+) -> Tuple[Optional[str], Optional[str]]:
     if not _is_verifiable_value(value):
-        return None
+        return None, None
     try:
         parsed = date.fromisoformat(value.strip()[:10])
     except ValueError:
-        return None
+        return None, "unparseable_date"
     if parsed not in source_dates:
-        return None
-    return value
+        return None, "date_not_in_source"
+    return value, None
 
 
-def _validate_deadline_raw_text(value: Any, source_dates: Set[date]) -> Optional[str]:
+def _validate_deadline_raw_text(
+    value: Any, source_dates: Set[date]
+) -> Tuple[Optional[str], Optional[str]]:
     if not _is_verifiable_value(value):
-        return None
+        return None, None
     absolute_date = parse_absolute_date(value)
     if absolute_date is None:
         # A relative phrase ("innerhalb von 14 Tagen") or one that doesn't
         # parse at all - no literal date to verify here, so it's left to
         # resolve_deadline()'s own existing fail-closed handling.
-        return value
+        return value, None
     if absolute_date not in source_dates:
-        return None
-    return value
+        return None, "date_not_in_source"
+    return value, None
 
 
 def validate_intelligence_signals(
@@ -445,18 +501,30 @@ def validate_intelligence_signals(
     source_dates = find_all_dates_in_text(text)
 
     validated = dict(raw_response)
-    validated[DEADLINE_RAW_TEXT_KEY] = _validate_deadline_raw_text(
+
+    deadline_raw_text, reason = _validate_deadline_raw_text(
         raw_response.get(DEADLINE_RAW_TEXT_KEY), source_dates
     )
-    validated[DOCUMENT_DATE_KEY] = _validate_date_string(
-        raw_response.get(DOCUMENT_DATE_KEY), source_dates
-    )
-    validated[EFFECTIVE_DATE_KEY] = _validate_date_string(
-        raw_response.get(EFFECTIVE_DATE_KEY), source_dates
-    )
+    if reason:
+        logger.warning("validation: deadline_raw_text dropped (%s)", reason)
+    validated[DEADLINE_RAW_TEXT_KEY] = deadline_raw_text
+
+    document_date, reason = _validate_date_string(raw_response.get(DOCUMENT_DATE_KEY), source_dates)
+    if reason:
+        logger.warning("validation: document_date dropped (%s)", reason)
+    validated[DOCUMENT_DATE_KEY] = document_date
+
+    effective_date, reason = _validate_date_string(raw_response.get(EFFECTIVE_DATE_KEY), source_dates)
+    if reason:
+        logger.warning("validation: effective_date dropped (%s)", reason)
+    validated[EFFECTIVE_DATE_KEY] = effective_date
 
     payment_requested = raw_response.get(PAYMENT_REQUESTED_KEY) is True
-    action_summary = _drop_if_hallucinated_date(raw_response.get(ACTION_SUMMARY_KEY), source_dates)
+    action_summary, reason = _drop_if_hallucinated_date(
+        raw_response.get(ACTION_SUMMARY_KEY), source_dates
+    )
+    if reason:
+        logger.warning("validation: action_summary dropped (%s)", reason)
     payment_requested, action_summary = _validate_payment_requested(
         payment_requested, action_summary, text
     )

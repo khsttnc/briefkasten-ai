@@ -204,6 +204,12 @@ function AppHome() {
   // view, so the user re-clicked and the retry happened to succeed).
   const [aiStatusMessage, setAIStatusMessage] = useState<string>('');
   const [aiError, setAIError] = useState<AppError | null>(null);
+  // Honest, cheap alternative to a fake progress bar: we have no way to
+  // know real progress (the AI provider gives no intermediate signal), so
+  // showing a percentage would just be inventing one. An elapsed-time
+  // counter tells the user "it's still working, here's how long" without
+  // claiming to know more than that.
+  const [aiElapsedSeconds, setAIElapsedSeconds] = useState(0);
   // Bumped after a successful AI analysis to force MeineDokumente to
   // remount and re-fetch - otherwise a document analyzed in the current
   // session never shows its priority/deadline there until the page reloads.
@@ -217,6 +223,17 @@ function AppHome() {
   const aiRequestIdRef = useRef(0);
 
   const documentId = useMemo(() => uploadResult?.id ?? null, [uploadResult]);
+
+  useEffect(() => {
+    if (!aiLoading) {
+      setAIElapsedSeconds(0);
+      return;
+    }
+    const intervalId = window.setInterval(() => {
+      setAIElapsedSeconds((seconds) => seconds + 1);
+    }, 1000);
+    return () => window.clearInterval(intervalId);
+  }, [aiLoading]);
 
   const scrollToTool = () => {
     document.getElementById(TOOL_SECTION_ID)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -437,7 +454,12 @@ function AppHome() {
             {!documentId && <p className="muted-text">Önce bir belge yükleyip analiz edin.</p>}
           </div>
 
-          {aiStatusMessage && <div className="status-banner">{aiStatusMessage}</div>}
+          {aiStatusMessage && (
+            <div className="status-banner">
+              {aiStatusMessage}
+              {aiLoading && aiElapsedSeconds > 0 && ` (${aiElapsedSeconds} saniyedir bekleniyor)`}
+            </div>
+          )}
           {aiError && <div className="error-banner">{aiError.message}</div>}
 
           {aiResult && (

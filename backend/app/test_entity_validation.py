@@ -550,5 +550,82 @@ class PaymentInformationVsDemandRegressionTestCase(unittest.TestCase):
         )
 
 
+class DroppedFieldLoggingTestCase(unittest.TestCase):
+    """A dropped field must be logged (field + rule, never the actual
+    content) at WARNING - the level docker compose logs backend shows with
+    no extra config. Real motivation: three separate incidents where
+    diagnosing an empty field meant pulling the raw AI response out of the
+    database by hand each time; this makes it a one-line log grep instead."""
+
+    LOGGER_NAME = "briefkasten.entity_validation"
+
+    def test_extracted_entities_drop_is_logged_with_reason_and_count(self):
+        entities = [{"type": "adac_membership_number", "value": "000000000"}]
+        with self.assertLogs(self.LOGGER_NAME, level="WARNING") as logs:
+            validate_extracted_entities(entities, SOURCE_TEXT)
+        self.assertTrue(
+            any("extracted_entities dropped 1/1 (not_in_source)" in msg for msg in logs.output)
+        )
+
+    def test_extracted_entities_kept_logs_nothing(self):
+        entities = [{"type": "adac_membership_number", "value": "734333034"}]
+        with self.assertNoLogs(self.LOGGER_NAME, level="WARNING"):
+            validate_extracted_entities(entities, SOURCE_TEXT)
+
+    def test_important_dates_filter_is_logged_with_before_after_counts(self):
+        with self.assertLogs(self.LOGGER_NAME, level="WARNING") as logs:
+            validate_important_dates(["10.01.2023"], KUENDIGUNG_TEXT)
+        self.assertTrue(
+            any(
+                "important_dates filtered 1 -> 0 (dates_not_in_source)" in msg
+                for msg in logs.output
+            )
+        )
+
+    def test_important_dates_kept_logs_nothing(self):
+        with self.assertNoLogs(self.LOGGER_NAME, level="WARNING"):
+            validate_important_dates(["10.01.2020"], KUENDIGUNG_TEXT)
+
+    def test_document_date_drop_is_logged(self):
+        raw = {"document_date": "2023-01-10"}
+        with self.assertLogs(self.LOGGER_NAME, level="WARNING") as logs:
+            validate_intelligence_signals(raw, KUENDIGUNG_TEXT)
+        self.assertTrue(
+            any("document_date dropped (date_not_in_source)" in msg for msg in logs.output)
+        )
+
+    def test_payment_requested_downgrade_and_action_summary_drop_are_both_logged(self):
+        raw = {"payment_requested": True, "action_summary": "15 gün içinde ödeyin."}
+        with self.assertLogs(self.LOGGER_NAME, level="WARNING") as logs:
+            validate_intelligence_signals(raw, KUENDIGUNG_TEXT)
+        joined = " | ".join(logs.output)
+        self.assertIn("payment_requested downgraded true->false (unevidenced_payment_demand)", joined)
+        self.assertIn("action_summary dropped (unevidenced_payment_claim)", joined)
+
+    def test_explanatory_text_drop_uses_the_given_field_name(self):
+        text = "15 gün içinde ödeyin."
+        with self.assertLogs(self.LOGGER_NAME, level="WARNING") as logs:
+            validate_explanatory_text(text, EUROPA_GO_VERTRAGSAUFHEBUNG_TEXT, field_name="turkish_explanation")
+        self.assertTrue(
+            any(
+                "turkish_explanation dropped (unevidenced_payment_claim)" in msg
+                for msg in logs.output
+            )
+        )
+
+    def test_explanatory_text_unverified_amount_reason_is_logged(self):
+        text = "Aylık 199,99 € prim ödenecektir."
+        with self.assertLogs(self.LOGGER_NAME, level="WARNING") as logs:
+            validate_explanatory_text(text, CHECK24_INSURANCE_QUOTE_TEXT, field_name="summary")
+        self.assertTrue(
+            any("summary dropped (unverified_amount)" in msg for msg in logs.output)
+        )
+
+    def test_no_logging_when_nothing_is_dropped(self):
+        raw = {"document_date": "2020-01-10", "payment_requested": False}
+        with self.assertNoLogs(self.LOGGER_NAME, level="WARNING"):
+            validate_intelligence_signals(raw, KUENDIGUNG_TEXT)
+
+
 if __name__ == "__main__":
     unittest.main()

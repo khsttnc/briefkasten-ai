@@ -429,9 +429,11 @@ def analyze_document_ai_by_id(
     # payment_requested below) and are produced by every provider
     # regardless of whether it populates document_intelligence.SIGNAL_KEYS
     # at all - see entity_validation.validate_explanatory_text.
-    analysis_result.summary = validate_explanatory_text(analysis_result.summary, document.text or "")
+    analysis_result.summary = validate_explanatory_text(
+        analysis_result.summary, document.text or "", field_name="summary"
+    )
     analysis_result.turkish_explanation = validate_explanatory_text(
-        analysis_result.turkish_explanation, document.text or ""
+        analysis_result.turkish_explanation, document.text or "", field_name="turkish_explanation"
     )
 
     status = "failed" if analysis_result.error_message else "completed"
