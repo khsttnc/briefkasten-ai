@@ -380,10 +380,18 @@ EUROPA_GO_VERTRAGSAUFHEBUNG_TEXT = (
 
 
 class PaymentEvidenceTighteningTestCase(unittest.TestCase):
-    """Regression guard for the reported production bug: a document merely
-    naming a bank, credit card, or insurance product must not be accepted
-    as evidence of an actual payment demand - only an amount AND a
-    payment-action verb, together, count."""
+    """Regression guard for two, opposite reported production bugs:
+
+    1) A document merely naming a bank, credit card, or insurance product
+       (no payment-action verb anywhere) must not be accepted as evidence
+       of an actual payment demand.
+    2) A document that DOES use unambiguous payment/collection verbs
+       ("fällig", "überweisen", "eingezogen", ...) must not be rejected
+       just because it never restates the amount as a bare digit in that
+       passage - amount is no longer required alongside the verb (see
+       _PAYMENT_ACTION_VERBS_DE's comment for the real ADAC incident that
+       motivated this: a genuine payment demand was wrongly downgraded to
+       payment_requested=false and its explanation deleted)."""
 
     def test_amount_and_verb_together_is_sufficient_evidence(self):
         raw = {"payment_requested": True, "action_summary": "Ödeyin."}
@@ -397,17 +405,35 @@ class PaymentEvidenceTighteningTestCase(unittest.TestCase):
         self.assertFalse(result["payment_requested"])
         self.assertIsNone(result["action_summary"])
 
-    def test_amount_without_action_verb_is_not_sufficient_evidence(self):
+    def test_amount_without_action_verb_is_still_not_sufficient_evidence(self):
         raw = {"payment_requested": True, "action_summary": "Ödeyin."}
         text = KUENDIGUNG_TEXT + "Ihr aktueller Kontostand betrug zuletzt 50,00 EUR.\n"
         result = validate_intelligence_signals(raw, text)
         self.assertFalse(result["payment_requested"])
 
-    def test_action_verb_without_amount_is_not_sufficient_evidence(self):
+    def test_action_verb_alone_without_any_amount_is_now_sufficient_evidence(self):
         raw = {"payment_requested": True, "action_summary": "Ödeyin."}
         text = KUENDIGUNG_TEXT + "Der Betrag ist fällig.\n"
         result = validate_intelligence_signals(raw, text)
-        self.assertFalse(result["payment_requested"])
+        self.assertTrue(result["payment_requested"])
+        self.assertEqual(result["action_summary"], "Ödeyin.")
+
+    def test_real_collection_letter_with_no_digit_amount_keeps_payment_requested(self):
+        # Shaped after the real reported ADAC incident: "fällig",
+        # "überweisen", an IBAN, and a re-collection threat, but the
+        # amount is only ever referred to as "der fällige Betrag" /
+        # "den Gesamtbetrag" - never restated as a digit in this passage.
+        text = (
+            "Der fällige Betrag konnte jedoch nicht eingezogen werden. "
+            "Überweisen Sie den Betrag bitte ausnahmsweise. "
+            "Überweisen Sie den Gesamtbetrag auf das Konto IBAN DE47 7002 0270. "
+            "Sollten Sie nicht überweisen, werden wir innerhalb von 14 Tagen "
+            "nochmals die fälligen Beiträge einziehen."
+        )
+        raw = {"payment_requested": True, "action_summary": "Lütfen tutarı ödeyin."}
+        result = validate_intelligence_signals(raw, text)
+        self.assertTrue(result["payment_requested"])
+        self.assertEqual(result["action_summary"], "Lütfen tutarı ödeyin.")
 
 
 class ExplanatoryTextValidationTestCase(unittest.TestCase):
@@ -548,6 +574,14 @@ class PaymentInformationVsDemandRegressionTestCase(unittest.TestCase):
         self.assertEqual(
             validate_explanatory_text(text, CHECK24_INSURANCE_QUOTE_TEXT), text
         )
+
+    def test_eur_prefix_amount_in_source_is_recognized(self):
+        # The original _PAYMENT_AMOUNT_RE only matched "123,45 EUR"/"€123,45"
+        # (EUR as a suffix, or € as either prefix or suffix) - "EUR 123,45"
+        # (EUR as a bare prefix, no € symbol) was a real gap.
+        source = "Ihr Vertrag kostet EUR 71,19 monatlich.\n"
+        text = "Aylık prim 71,19 € ödenecektir."
+        self.assertEqual(validate_explanatory_text(text, source), text)
 
 
 class DroppedFieldLoggingTestCase(unittest.TestCase):

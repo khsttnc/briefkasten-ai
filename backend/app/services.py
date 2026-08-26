@@ -44,6 +44,36 @@ UPLOAD_CHUNK_SIZE = 1024 * 1024
 
 _UNSAFE_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._ \-]")
 
+# Real production incident: a PDF's own text layer (from ADAC's letter
+# generator, likely justifying/hyphenating text for layout) embedded a
+# soft hyphen (U+00AD - invisible when rendered, but a real character in
+# the extracted string) mid-word at line-wrap points - "Lastschriftverfah­ren"
+# extracted as "Lastschriftverfah\xadren". PyMuPDF's page.get_text()
+# returns the content stream's text verbatim, including this. Every
+# downstream substring/regex check in this app (entity_validation.py's
+# keyword matching, deadline_engine's date regexes, everything) works
+# against document.text directly, so a single invisible character
+# silently broke "fällig" into two non-matching halves and caused a real
+# payment demand to be misclassified as unevidenced - dropped entirely
+# instead of shown to the reader. Stripped once here, at the single point
+# all extracted text enters the system, rather than taught to every
+# consumer individually. Zero-width space/joiner/non-joiner and the UTF-8
+# BOM are stripped for the same reason - PDF text layers can carry any of
+# these depending on the authoring tool, none are ever meaningful to keep.
+_INVISIBLE_FORMATTING_CHARS = "".join(
+    # soft hyphen, zero-width space, zero-width non-joiner, zero-width
+    # joiner, BOM/zero-width no-break space - built from code points via
+    # chr() rather than embedding the literal invisible glyphs in this
+    # file, so the source stays plain ASCII and diffable.
+    chr(code_point)
+    for code_point in (0x00AD, 0x200B, 0x200C, 0x200D, 0xFEFF)
+)
+_INVISIBLE_FORMATTING_CHARS_RE = re.compile(f"[{_INVISIBLE_FORMATTING_CHARS}]")
+
+
+def _normalize_extracted_text(text: str) -> str:
+    return _INVISIBLE_FORMATTING_CHARS_RE.sub("", text)
+
 
 def _sanitize_original_filename(filename: str) -> str:
     """Reduce a client-supplied filename to a safe, display-only value (never used as a path)."""
@@ -196,7 +226,7 @@ def extract_text_with_ocr(filepath: str) -> str:
     finally:
         doc.close()
 
-    return "\n".join(pages_text)
+    return _normalize_extracted_text("\n".join(pages_text))
 
 
 def _ensure_document_analyzed(document: Document, db: Session) -> dict:
@@ -238,6 +268,7 @@ def _ensure_document_analyzed(document: Document, db: Session) -> dict:
     finally:
         doc.close()
 
+    text = _normalize_extracted_text(text)
     meaningful_text = text.strip()
     if meaningful_text:
         document.text = text

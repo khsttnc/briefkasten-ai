@@ -226,26 +226,38 @@ def validate_important_dates(
     return validated
 
 
-# Evidence that the document genuinely requests a payment: a currency
-# amount AND a payment-action verb, BOTH present somewhere in the source
-# text. A single broad keyword (the previous approach - "Betrag", "EUR",
-# "Rechnung", or similar) is not enough: a real production false positive
-# was an Antragsformular (application form) for a credit-card debt
-# insurance product, whose text mentioned "Kreditkarte", "Bank", and
-# "Versicherung" without requesting any payment at all - none of those
-# individually imply a payment demand, but the old single-keyword check
-# (which also included "Rechnung"/"Betrag") would have accepted any of
-# them as sufficient evidence. Requiring an amount AND a verb together is
-# still deliberately loose (no proximity/sentence-level check, no attempt
-# to also require a due date) - the goal remains only to catch the case
-# where the LLM claims payment_requested=true with no textual basis
-# whatsoever, not to precisely parse every real payment demand.
-_PAYMENT_AMOUNT_RE = re.compile(r"(?:€\s?\d[\d.,]*|\d[\d.,]*\s?(?:€|eur\b))", re.IGNORECASE)
+# Matches an amount with an adjacent currency marker in EITHER order -
+# "71,19 €"/"71,19EUR" (suffix) or "€71,19"/"EUR 71,19" (prefix, including
+# a bare "EUR" prefix with no € symbol, which the original suffix-only/
+# €-prefix-only pattern missed).
+_PAYMENT_AMOUNT_RE = re.compile(
+    r"(?:(?:€|eur\b)\s?\d[\d.,]*|\d[\d.,]*\s?(?:€|eur\b))", re.IGNORECASE
+)
 
+# Evidence that the document genuinely requests a payment. Verb presence
+# ALONE is sufficient - each of these is specific enough to payment/debt
+# contexts (a real Mahnung/Inkasso letter, not a product quote) that
+# requiring an amount to ALSO be present in digit form turned out to be
+# actively harmful: a real production ADAC collection letter used
+# "Der fällige Betrag konnte nicht eingezogen werden" / "überweisen Sie
+# den Betrag" / an IBAN / a 14-day re-collection threat - an unambiguous
+# payment demand - but never restated the amount as a bare digit anywhere
+# in that passage (only "der fällige Betrag", "den Gesamtbetrag" - the
+# number itself was presumably stated earlier in the original bill this
+# letter refers back to). Requiring amount+verb together caused
+# payment_requested to be wrongly downgraded to false and summary/
+# turkish_explanation/action_summary to all be dropped, silently deleting
+# a real payment obligation from what the reader sees - worse than the
+# fabrication risk this was meant to guard against. The original
+# false-positive case this AND-requirement was added for (an
+# Antragsformular mentioning "Kreditkarte"/"Bank"/"Versicherung" with no
+# payment demand) had ZERO verbs from this list anywhere in it either -
+# verb-only already rejects it correctly, the amount requirement was
+# never actually load-bearing for that case.
 _PAYMENT_ACTION_VERBS_DE = (
     "zu zahlen", "zahlen sie", "bitte zahlen", "überweisen", "überweisung",
     "entrichten", "beglichen", "fällig", "zahlungsfrist", "einzuzahlen",
-    "vollstreckung",
+    "vollstreckung", "eingezogen",
 )
 
 # The Turkish verb stem "öde-" (ödemek = to pay) - matches ödeme, ödeyin,
@@ -277,10 +289,10 @@ _PAYMENT_DEMAND_PHRASES_TR = ("öde",)
 
 
 def _has_payment_evidence(source_text: str) -> bool:
+    # Verb-only - see _PAYMENT_ACTION_VERBS_DE's comment for why an amount
+    # is no longer also required.
     lowered_text = source_text.lower()
-    has_amount = bool(_PAYMENT_AMOUNT_RE.search(source_text))
-    has_action_verb = any(verb in lowered_text for verb in _PAYMENT_ACTION_VERBS_DE)
-    return has_amount and has_action_verb
+    return any(verb in lowered_text for verb in _PAYMENT_ACTION_VERBS_DE)
 
 
 def _drop_if_hallucinated_date(

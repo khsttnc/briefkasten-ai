@@ -133,6 +133,76 @@ class UploadAnalyzePipelineIntegrationTestCase(unittest.TestCase):
         self.assertIsNone(result["error_message"])
 
 
+class SoftHyphenExtractionPipelineTestCase(unittest.TestCase):
+    """End-to-end regression guard for a real production bug: a PDF's own
+    text layer embedded a soft hyphen (U+00AD, invisible when rendered)
+    mid-word at a line-wrap point, extracted verbatim by PyMuPDF's
+    page.get_text() - "fällig" split into "f\xadällig" broke every
+    downstream substring check looking for the whole word (entity_validation
+    payment-evidence keywords, in this case). services._normalize_extracted_text
+    must strip it from document.text before anything else ever sees it.
+    Uses an isolated in-memory database and temp upload directory - the
+    real backend/briefkasten.db and backend/uploads/ are never touched."""
+
+    def setUp(self):
+        self.tmp_dir = Path(tempfile.mkdtemp(prefix="briefkasten_soft_hyphen_test_"))
+        self.upload_root_patcher = patch.object(services, "UPLOAD_ROOT", self.tmp_dir.resolve())
+        self.upload_root_patcher.start()
+
+        self.engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+        Base.metadata.create_all(bind=self.engine)
+        self.SessionLocal = sessionmaker(bind=self.engine)
+        self.db = self.SessionLocal()
+        self.owner_id = _create_test_user(self.db).id
+
+    def tearDown(self):
+        self.db.close()
+        self.upload_root_patcher.stop()
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def test_soft_hyphen_is_stripped_from_extracted_text(self):
+        # A real PDF authoring tool's own text layer can carry a raw
+        # U+00AD in its content stream (that's the actual production
+        # incident), but PyMuPDF's own insert_text() - used to build this
+        # test's fixture PDF - re-encodes it into a visible hyphen glyph
+        # via the base14 font's WinAnsi table before it can round-trip
+        # back out, so it can't be used to reproduce the input here.
+        # fitz.open is mocked instead, standing in for "whatever a real
+        # PDF's own text layer contains", to exercise the actual
+        # extraction call site (_ensure_document_analyzed) rather than
+        # only the pure _normalize_extracted_text function (already
+        # covered directly in test_text_normalization.py).
+        pdf_bytes = _build_sample_pdf_bytes("Placeholder for a real PDF upload")
+        upload = FakeUploadFile("Mahnung.pdf", pdf_bytes)
+        document = services.save_document(upload, self.db, owner_id=self.owner_id)
+
+        class _FakeRect:
+            width = 100
+            height = 100
+
+        class _FakePage:
+            rect = _FakeRect()
+
+            def get_text(self):
+                return "Der Betrag ist f\xadällig zu zahlen."
+
+        class _FakeDoc:
+            page_count = 1
+
+            def __iter__(self):
+                return iter([_FakePage()])
+
+            def close(self):
+                pass
+
+        with patch.object(services.fitz, "open", return_value=_FakeDoc()):
+            services.analyze_document_by_id(document.id, self.db, owner_id=self.owner_id)
+
+        refreshed = self.db.query(Document).filter(Document.id == document.id).first()
+        self.assertNotIn("\xad", refreshed.text)
+        self.assertIn("fällig", refreshed.text)
+
+
 class DuplicateAIAnalysisPreventionTestCase(unittest.TestCase):
     """Verifies that a completed AI analysis is reused instead of re-calling
     the AI provider, while a failed analysis remains retryable. Uses an
