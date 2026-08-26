@@ -49,6 +49,21 @@ from .ollama_provider import _build_ollama_prompt as _build_claude_prompt
 # key is available, rather than trusting this estimate indefinitely.
 DEFAULT_MAX_TOKENS = 4000
 
+# Previously unset (silently used the Anthropic API's own default, ~1.0 -
+# high, creative sampling for a deterministic extraction task). Set
+# explicitly to the same value nvidia_provider.py's real measurement
+# settled on (see DEFAULT_TEMPERATURE's comment there): temperature=0
+# measurably stabilized the shared prompt's short structured fields
+# (classified_document_type etc.) with no observed downside, though it did
+# NOT fix long free-text field (summary/turkish_explanation) consistency -
+# that appears to be inherent to how these models are served, not
+# something temperature alone controls. UNVERIFIED for Claude specifically
+# (no ANTHROPIC_API_KEY available to make a real call) - directionally
+# justified by the NVIDIA measurement and standard practice for structured
+# extraction, but re-measure once a key is available rather than trusting
+# this by analogy indefinitely.
+DEFAULT_TEMPERATURE = 0
+
 
 def _load_json_safe(text: str) -> Optional[Dict[str, Any]]:
     try:
@@ -120,6 +135,7 @@ class ClaudeProvider(BaseAIProvider):
                 model=self._model,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=DEFAULT_MAX_TOKENS,
+                temperature=DEFAULT_TEMPERATURE,
             )
         # RateLimitError and AuthenticationError are subclasses of APIStatusError,
         # so they must be caught before the general APIStatusError branch.

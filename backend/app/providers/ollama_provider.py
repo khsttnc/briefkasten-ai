@@ -50,6 +50,20 @@ DEFAULT_NUM_CTX = 4096
 # (0.8). Structured-extraction tasks like this one don't need creative
 # sampling, so a low temperature makes output more deterministic and
 # schema-compliant.
+#
+# Reviewed (not changed) after a real-API determinism measurement against
+# nvidia_provider.py's identical shared prompt found temperature=0 helped
+# short structured fields but not long free-text ones (see
+# nvidia_provider.DEFAULT_TEMPERATURE's comment for the numbers) - the
+# same change was deliberately NOT copied here without its own live test:
+# DEFAULT_REPEAT_PENALTY below was tuned across ~30 real runs specifically
+# AT this 0.2 temperature to fight llama3.2:3b's repetition-loop tendency,
+# and lower temperature generally makes a small model MORE greedy, i.e.
+# MORE prone to repetition loops, not less - the opposite direction from
+# what fixed NVIDIA's structured-field inconsistency. Changing this to 0
+# could plausibly make Ollama's own documented failure mode worse; it
+# needs its own real measurement against an actually-configured Ollama
+# model (OLLAMA_MODEL is unset in this deployment) before touching it.
 DEFAULT_TEMPERATURE = 0.2
 
 # Ollama's default repeat_penalty (1.1) was not enough to reliably stop

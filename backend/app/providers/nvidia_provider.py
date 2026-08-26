@@ -43,7 +43,36 @@ from .ollama_provider import _build_ollama_prompt as _build_nvidia_prompt
 # still leaves roughly 9x headroom over this measurement, so the value did
 # not need to move; only the margin got safer.
 DEFAULT_MAX_TOKENS = 4000
-DEFAULT_TEMPERATURE = 0.2
+# Measured, not guessed, against the live API (2026-08-26, 13 real calls
+# total against the same fixed multi-signal document - a Jobcenter
+# Änderungsbescheid with a 14-day document-submission deadline and a
+# separate 1-month Widerspruch deadline - see the scratchpad measurement
+# script referenced in TODO.md): at the previous DEFAULT_TEMPERATURE=0.2
+# with no top_p set, 5 repeated calls against the identical prompt produced
+# 5 different turkish_explanation values (avg pairwise similarity 0.28) and
+# even a dropped classified_document_type (null on one call,
+# "Änderungsbescheid" on the other four) - the exact "same document,
+# different answer each time" behavior reported in production.
+# temperature=0, top_p=0.1 fixed the SHORT categorical field
+# (classified_document_type: 5/5 identical across 8 further calls at these
+# settings) but did NOT fix the LONG free-text fields (summary/
+# turkish_explanation/action_summary): still 5/5 unique wordings, avg
+# similarity 0.22 - no better than before. Adding a fixed `seed` on top
+# (tested separately, 3 more calls) made no further difference either
+# (still 3/3 unique, avg similarity 0.18). Conclusion: this API/model
+# combination does not give deterministic long-form generation regardless
+# of temperature/top_p/seed - likely inherent to the serving stack
+# (nemotron-3-nano-30b-a3b is a mixture-of-experts model; MoE routing and
+# batched-inference floating-point non-associativity are common causes of
+# server-side non-determinism even at temperature=0). Kept temperature=0/
+# top_p=0.1 anyway since they measurably help the structured fields the
+# deterministic engines (deadline_engine/priority_engine) actually act on,
+# with no observed downside (JSON parse success stayed 13/13 across every
+# setting tested - the ~20% JSON-failure rate noted in TODO.md was not
+# reproduced in this sample, which is too small to conclude it improved).
+# The free-text consistency problem itself remains open - see TODO.md.
+DEFAULT_TEMPERATURE = 0.0
+DEFAULT_TOP_P = 0.1
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 120
 # A frequency_penalty (tried as a mitigation, mirroring Ollama's
 # DEFAULT_REPEAT_PENALTY) was evaluated against the repetition-loop failure
@@ -147,6 +176,7 @@ class NvidiaProvider(BaseAIProvider):
                 "messages": [{"role": "user", "content": prompt}],
                 "max_tokens": DEFAULT_MAX_TOKENS,
                 "temperature": DEFAULT_TEMPERATURE,
+                "top_p": DEFAULT_TOP_P,
                 **DISABLE_THINKING_KWARGS,
             }
         ).encode("utf-8")
