@@ -61,7 +61,20 @@ NVIDIA_API_KEY_ENV = "NVIDIA_API_KEY"
 NVIDIA_MODEL_ENV = "NVIDIA_MODEL"
 NVIDIA_BASE_URL_ENV = "NVIDIA_BASE_URL"
 DEFAULT_NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
-DEFAULT_NVIDIA_MODEL = "nvidia/nemotron-3-nano-30b-a3b"
+# Switched from nvidia/nemotron-3-nano-30b-a3b 2026-08-26 after a real-API
+# consistency comparison (5 calls each, same fixed multi-signal document,
+# temperature=0/top_p=0.1 - see providers/nvidia_provider.py's
+# DEFAULT_TEMPERATURE comment for the full methodology): nemotron produced
+# a different turkish_explanation on every call, and in production a
+# reported instance had an outright content error (an inverted attachment
+# instruction). gpt-oss-120b's 5 calls were still lexically different
+# (paraphrase task, expected) but semantically identical every time - same
+# amount, same date, same deadlines, same required actions, no
+# contradictions - which is what actually matters for the reported bug.
+# Same NVIDIA free tier, no cost change. llama-3.3-70b-instruct (the other
+# candidate) reached end of life on NVIDIA's API on 2026-08-26 and could
+# not be tested.
+DEFAULT_NVIDIA_MODEL = "openai/gpt-oss-120b"
 
 # Supabase Auth issues user JWTs signed with the project's asymmetric
 # (ES256/P-256) signing key. auth.py verifies them against the public key

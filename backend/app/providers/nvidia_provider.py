@@ -81,14 +81,17 @@ DEFAULT_REQUEST_TIMEOUT_SECONDS = 120
 # avoid repeating tokens, which broke JSON validity even more often (3/3 vs
 # 1/3 failures in a small manual sample). Deliberately not applied.
 
-# nvidia/nemotron-3-nano-30b-a3b is a reasoning-capable model: left at its
+# nvidia/nemotron-3-nano-30b-a3b (the previous default model - see
+# config.DEFAULT_NVIDIA_MODEL) is a reasoning-capable model: left at its
 # default, it spends its entire completion budget on a chain-of-thought
 # (returned as a separate reasoning_content field, or - if that budget runs
 # out mid-thought - duplicated verbatim into content instead of the JSON
 # answer, which is what a real end-to-end test against this model hit before
 # this flag was added). Document Intelligence extraction is a deterministic
 # formatting task, not a reasoning task, so thinking is disabled outright
-# rather than sized around it.
+# rather than sized around it. Kept unconditionally for the current default
+# (openai/gpt-oss-120b, also a reasoning model) too - confirmed via a real
+# API call that it's accepted without error there as well.
 DISABLE_THINKING_KWARGS = {"chat_template_kwargs": {"thinking": False}}
 
 

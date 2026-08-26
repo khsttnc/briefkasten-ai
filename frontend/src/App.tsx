@@ -245,7 +245,7 @@ function AppHome() {
     }
   };
 
-  const handleAIAnalyze = async (force = false) => {
+  const handleAIAnalyze = async () => {
     if (aiLoading) {
       // Button is disabled while aiLoading, but that disabling only takes
       // effect after React re-renders - guard here too so a fast double
@@ -265,16 +265,24 @@ function AppHome() {
     // front rather than leaving the user staring at a spinner with no
     // sense of whether it's still working.
     const isLongDocument = (analysisResult?.characters ?? 0) > LONG_DOCUMENT_CHAR_THRESHOLD;
-    const actionLabel = force ? 'Belge yeniden analiz ediliyor' : 'AI analizi başlatılıyor';
     setAIStatusMessage(
       isLongDocument
-        ? `${actionLabel}. Bu belge uzun olduğu için analiz biraz sürebilir (15-20 saniyeye kadar), lütfen bekleyin...`
-        : `${actionLabel}, bu biraz zaman alabilir...`
+        ? 'AI analizi başlatılıyor. Bu belge uzun olduğu için analiz biraz sürebilir (15-20 saniyeye kadar), lütfen bekleyin...'
+        : 'AI analizi başlatılıyor, bu biraz zaman alabilir...'
     );
     setAILoading(true);
 
     try {
-      const response = await analyzeDocumentAIById(documentId, { force });
+      // Deliberately no re-analyze affordance in the UI: the same NVIDIA
+      // model measurably gives a different (sometimes factually wrong)
+      // turkish_explanation on repeated calls for the identical document,
+      // so once a document has an analysis, that analysis is final -
+      // showing the user a second, possibly contradictory result would be
+      // worse than showing them nothing new. The backend's force=true
+      // re-analysis path still exists (services.py) for a developer to
+      // trigger manually after a taxonomy/prompt update, just not from
+      // this UI.
+      const response = await analyzeDocumentAIById(documentId);
       setAIResult(response);
       setAIStatusMessage('AI analizi tamamlandı. Sonuçlar aşağıda gösteriliyor.');
       setDocumentsRefreshKey((key) => key + 1);
@@ -383,16 +391,6 @@ function AppHome() {
             >
               {aiLoading ? 'AI analizi çalışıyor...' : 'AI ile analiz et'}
             </button>
-            {aiResult && (
-              <button
-                onClick={() => handleAIAnalyze(true)}
-                disabled={aiLoading}
-                className="secondary-button"
-                title="Taksonomi veya AI modeli güncellendiyse eski sonucu atıp belgeyi baştan analiz eder."
-              >
-                {aiLoading ? 'Yeniden analiz ediliyor...' : 'Yeniden analiz et'}
-              </button>
-            )}
             {!documentId && <p className="muted-text">Önce bir belge yükleyip analiz edin.</p>}
           </div>
 
