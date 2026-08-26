@@ -219,22 +219,32 @@ _PAYMENT_ACTION_VERBS_DE = (
     "vollstreckung",
 )
 
-# Turkish payment-related wording that a free-text field (action_summary,
-# summary, turkish_explanation) might contain when it asserts a payment
-# obligation the source text doesn't actually support. Used two ways: (1)
-# to decide whether action_summary needs to be dropped once
-# payment_requested is downgraded (_validate_payment_requested), and (2) by
-# validate_explanatory_text to catch the same fabricated-payment-claim
-# pattern in summary/turkish_explanation directly - which matters because
-# those two fields are produced by every provider even when it populates no
-# other document_intelligence.SIGNAL_KEYS at all (ClaudeProvider's prompt
-# didn't, until it was wired into the shared signal-key prompt - see
-# claude_provider.py), so a payment_requested=false check alone would miss
-# a payment narrative invented straight into the prose.
-_PAYMENT_KEYWORDS_TR = (
-    "öde", "ödeme", "ödeyin", "ödenmesi", "ödenecek", "borç", "borc",
-    "tutar", "fatura", "avans", "€", "eur", " tl",
-)
+# The Turkish verb stem "öde-" (ödemek = to pay) - matches ödeme, ödeyin,
+# ödenmesi, ödenecek, ödemeniz, ödemek, etc. via substring, without needing
+# to enumerate every inflected form. Used to catch a fabricated payment
+# DEMAND smuggled into a free-text field (action_summary, summary,
+# turkish_explanation), not to catch every mention of money/billing
+# vocabulary in general - deliberately does NOT include neutral financial
+# nouns like "fatura" (invoice), "tutar" (amount), "borç" (debt), "€"/"eur"
+# (the previous, broader list did), because those regularly appear in
+# purely informational sentences with no payment demand at all. Real
+# production false positive from the broader list: a Vertragsaufhebung
+# (insurance contract termination, nothing owed) had its entire - correct,
+# source-backed - explanation dropped because it mentioned "fatura" in
+# passing ("hesaplama ayrı faturada" = "see the separate invoice for the
+# breakdown", a neutral pointer to a document, not a demand to pay) - that
+# sentence contains no "öde"-rooted word at all, so this narrower check
+# would not have dropped it. Used two ways: (1) to decide whether
+# action_summary needs to be dropped once payment_requested is downgraded
+# (_validate_payment_requested), and (2) by validate_explanatory_text to
+# catch the same pattern in summary/turkish_explanation directly - which
+# matters because those two fields are produced by every provider even when
+# it populates no other document_intelligence.SIGNAL_KEYS at all
+# (ClaudeProvider's prompt didn't, until it was wired into the shared
+# signal-key prompt - see claude_provider.py), so a payment_requested=false
+# check alone would miss a payment narrative invented straight into the
+# prose.
+_PAYMENT_DEMAND_PHRASES_TR = ("öde",)
 
 
 def _has_payment_evidence(source_text: str) -> bool:
@@ -260,9 +270,9 @@ def _drop_if_hallucinated_date(value: Optional[str], source_dates: Set[date]) ->
 def _drop_if_unevidenced_payment_claim(value: Optional[str], source_text: str) -> Optional[str]:
     if not value:
         return value
-    if any(keyword in value.lower() for keyword in _PAYMENT_KEYWORDS_TR) and not _has_payment_evidence(
-        source_text
-    ):
+    if any(
+        phrase in value.lower() for phrase in _PAYMENT_DEMAND_PHRASES_TR
+    ) and not _has_payment_evidence(source_text):
         # Not attempting to surgically remove just the payment-related
         # clause from a free-form LLM sentence - that risks leaving a
         # grammatically broken or still-misleading remainder. Dropping the

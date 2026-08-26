@@ -690,6 +690,114 @@ class FreeTextOnlyHallucinationPipelineTestCase(unittest.TestCase):
         self.assertIn("15 gün içinde", stored_raw_response["turkish_explanation"])
 
 
+class EuropaGoVertragsaufhebungAIProvider:
+    """Stand-in for a CORRECT NVIDIA-shaped extraction of the real reported
+    over-correction case: a EUROPA-go vehicle insurance Vertragsaufhebung
+    with a genuine effective_date and a neutral, non-demanding invoice
+    mention. Everything here is verifiable against the source text - this
+    provider models what the LLM SHOULD produce, to prove the validation
+    layer keeps correct content rather than rejecting it."""
+
+    provider_name = "dummy-europa-go"
+    model_name = "dummy-europa-go-model"
+
+    def __init__(self):
+        self.calls = 0
+
+    def analyze_document(self, text: str) -> AIAnalysisResult:
+        self.calls += 1
+        raw_response = {
+            "document_type": "letter",
+            "language": "de",
+            "summary": "Araç sigorta sözleşmeniz 10.12.2025 tarihinde sona eriyor.",
+            "turkish_explanation": (
+                "BE-EG 961 plakalı aracınıza ait sigorta sözleşmeniz 10.12.2025 "
+                "tarihinde sona eriyor. Hesaplama bilgilerini ayrı gönderilen "
+                "prim faturasında bulabilirsiniz."
+            ),
+            "important_dates": ["10.12.2025"],
+            "extracted_entities": [{"type": "license_plate", "value": "BE-EG 961"}],
+            "sender_category": "Unternehmen",
+            "sender_institution": "EUROPA-go",
+            "classified_document_type": "Kündigung",
+            "deadline_raw_text": None,
+            "effective_date": "2025-12-10",
+            "requires_action": False,
+            "payment_requested": False,
+            "objection_right_mentioned": False,
+            "action_summary": None,
+        }
+        return AIAnalysisResult(
+            document_type=raw_response["document_type"],
+            language=raw_response["language"],
+            summary=raw_response["summary"],
+            turkish_explanation=raw_response["turkish_explanation"],
+            important_dates=raw_response["important_dates"],
+            extracted_entities=raw_response["extracted_entities"],
+            raw_response=raw_response,
+        )
+
+
+class OverAggressiveValidationRegressionPipelineTestCase(unittest.TestCase):
+    """End-to-end regression guard for the reported over-correction bug:
+    given a CORRECT extraction (genuine effective_date, a neutral invoice
+    mention with no payment demand), the validation layer must keep the
+    explanation, the effective_date, and the Kündigung classification -
+    not silently degrade a real document to an empty explanation and
+    "Information". Uses an isolated in-memory database and temp upload
+    directory - the real backend/briefkasten.db and backend/uploads/ are
+    never touched."""
+
+    def setUp(self):
+        self.tmp_dir = Path(tempfile.mkdtemp(prefix="briefkasten_overaggressive_test_"))
+        self.upload_root_patcher = patch.object(services, "UPLOAD_ROOT", self.tmp_dir.resolve())
+        self.upload_root_patcher.start()
+
+        self.engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+        Base.metadata.create_all(bind=self.engine)
+        self.SessionLocal = sessionmaker(bind=self.engine)
+        self.db = self.SessionLocal()
+        self.owner_id = _create_test_user(self.db).id
+
+    def tearDown(self):
+        self.db.close()
+        self.upload_root_patcher.stop()
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def test_correct_explanation_and_effective_date_survive_validation(self):
+        pdf_bytes = _build_sample_pdf_bytes(
+            "Ihr Vertrag fuer das Fahrzeug mit dem amtlichen Kennzeichen "
+            "BE-EG 961 endet am 10.12.2025. Die Abrechnung entnehmen Sie "
+            "bitte der separaten Beitragsrechnung."
+        )
+        document = services.save_document(
+            FakeUploadFile("Vertragsaufhebung.pdf", pdf_bytes), self.db, owner_id=self.owner_id
+        )
+        services.analyze_document_by_id(document.id, self.db, owner_id=self.owner_id)
+
+        provider = EuropaGoVertragsaufhebungAIProvider()
+        with patch.object(services, "get_ai_provider", return_value=provider):
+            result = services.analyze_document_ai_by_id(document.id, self.db, owner_id=self.owner_id)
+
+        self.assertEqual(result["status"], "completed")
+
+        # The correct explanation must NOT be dropped just because it
+        # mentions an invoice in passing - it is source-backed and asserts
+        # no payment demand.
+        self.assertIsNotNone(result["turkish_explanation"])
+        self.assertIn("10.12.2025", result["turkish_explanation"])
+        self.assertIsNotNone(result["summary"])
+
+        # The stated date must survive both important_dates and
+        # effective_date validation.
+        self.assertEqual(result["important_dates"], ["10.12.2025"])
+
+        refreshed = self.db.query(Document).filter(Document.id == document.id).first()
+        self.assertIsNotNone(refreshed.effective_date)
+        self.assertEqual(refreshed.effective_date.date().isoformat(), "2025-12-10")
+        self.assertEqual(refreshed.document_type, "Kündigung")
+
+
 class DocumentIntelligencePostProcessingTestCase(unittest.TestCase):
     """Verifies the Step 3 wiring: the priority/deadline engines run after a
     successful or failed AI analysis and populate Document, but can never

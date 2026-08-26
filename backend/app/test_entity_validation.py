@@ -364,6 +364,20 @@ ANTRAGSFORMULAR_TEXT = (
     "Crawford & Company im Auftrag der Versicherung.\n"
 )
 
+# The real production over-correction case (the excerpt provided): a
+# EUROPA-go vehicle insurance contract-termination notice (Vertragsaufhebung)
+# with a clearly-stated effective_date and a neutral, non-demanding mention
+# of a separate invoice. The broader payment keyword list (including
+# "fatura") previously dropped the entire (correct) explanation for this
+# document just because a plausible Turkish translation of "Beitragsrechnung"
+# ("prim faturası") contains "fatura" - even though nothing here asks the
+# reader to pay anything or by when.
+EUROPA_GO_VERTRAGSAUFHEBUNG_TEXT = (
+    "Ihr Vertrag für das Fahrzeug mit dem amtlichen Kennzeichen BE-EG 961 "
+    "endet am 10.12.2025. Die Abrechnung entnehmen Sie bitte der separaten "
+    "Beitragsrechnung.\n"
+)
+
 
 class PaymentEvidenceTighteningTestCase(unittest.TestCase):
     """Regression guard for the reported production bug: a document merely
@@ -436,6 +450,50 @@ class ExplanatoryTextValidationTestCase(unittest.TestCase):
         self.assertIsNone(validate_explanatory_text(None, ANTRAGSFORMULAR_TEXT))
         self.assertIsNone(validate_explanatory_text("   ", ANTRAGSFORMULAR_TEXT))
         self.assertIsNone(validate_explanatory_text(123, ANTRAGSFORMULAR_TEXT))
+
+
+class OverAggressiveValidationRegressionTestCase(unittest.TestCase):
+    """Regression guard for the reported over-correction bug: a real
+    EUROPA-go Vertragsaufhebung (vehicle insurance contract termination),
+    with a genuine, source-backed effective_date and a purely informational
+    mention of a separate invoice, had its correct explanation dropped
+    entirely and its effective_date never reached the reader. The
+    validation layer's job is to reject UNVERIFIABLE content, not to reject
+    verifiable content that happens to mention billing vocabulary in
+    passing - the previous, broader Turkish keyword list ("fatura", "tutar",
+    "borç", "€"/"eur") conflated the two."""
+
+    def test_neutral_invoice_mention_is_kept_not_treated_as_payment_demand(self):
+        # Plausible Turkish rendering of "Die Abrechnung entnehmen Sie
+        # bitte der separaten Beitragsrechnung" - references an invoice
+        # document without demanding payment or stating a deadline.
+        text = (
+            "BE-EG 961 plakalı aracınıza ait sigorta sözleşmeniz 10.12.2025 "
+            "tarihinde sona eriyor. Hesaplama bilgilerini ayrı gönderilen "
+            "prim faturasında bulabilirsiniz."
+        )
+        self.assertEqual(
+            validate_explanatory_text(text, EUROPA_GO_VERTRAGSAUFHEBUNG_TEXT), text
+        )
+
+    def test_actual_payment_demand_is_still_dropped_without_evidence(self):
+        # Sanity check that narrowing the keyword list to the "öde" stem
+        # didn't also reopen the original bug: a genuine (fabricated, in
+        # this case) payment demand on the same source must still be
+        # dropped, since the source has no amount+verb evidence at all.
+        text = "15 gün içinde ödeyin."
+        self.assertIsNone(
+            validate_explanatory_text(text, EUROPA_GO_VERTRAGSAUFHEBUNG_TEXT)
+        )
+
+    def test_effective_date_stated_in_source_is_verified_and_kept(self):
+        raw = {"effective_date": "2025-12-10"}
+        result = validate_intelligence_signals(raw, EUROPA_GO_VERTRAGSAUFHEBUNG_TEXT)
+        self.assertEqual(result["effective_date"], "2025-12-10")
+
+    def test_important_date_stated_in_source_is_verified_and_kept(self):
+        result = validate_important_dates(["10.12.2025"], EUROPA_GO_VERTRAGSAUFHEBUNG_TEXT)
+        self.assertEqual(result, ["10.12.2025"])
 
 
 if __name__ == "__main__":
