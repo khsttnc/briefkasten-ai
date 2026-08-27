@@ -105,6 +105,21 @@ diğeri tek kaydın alan yapısı). Not: faz (b) (gerçek bölme) yapılırsa
 her alt-belge zaten tek/temiz bir konuya sahip olacağı için bu işin
 aciliyeti azalır.
 
+Bu şema, `entity_validation.py`'deki ödeme iddiası tespitini de
+gereksizleştirebilir: `_drop_if_unverifiable_payment_narrative`/
+`_drop_if_unevidenced_payment_claim` şu an serbest metinde Türkçe "öde"
+kökünü arayıp kaynak metinde tutar/fiil kanıtı bakıyor - 2026-08-27
+itibarıyla bu kontrolün **4. kalibrasyonu** yapıldı (her seferinde bir
+yanlış-pozitif düzeltilirken başka bir yanlış-negatif riski taşıdı; bkz.
+`test_entity_validation.py`'deki `PaymentEvidenceTighteningTestCase`,
+`PaymentInformationVsDemandRegressionTestCase`,
+`NegatedPaymentClaimRegressionTestCase`). Eğer `payment_requested`
+zaten yapılandırılmış bir alan olarak tutar/son tarihi ayrı taşırsa
+(şemanın "ne yapmalı/vade" alanları), serbest metinde kelime arayarak
+ödeme iddiası uydurmaya çalışmanın bir anlamı kalmaz - LLM zaten ayrı
+bir alana tutar/tarih yazmak zorunda kalır, doğrulama o alan üzerinden
+yapılır, serbest metin kontrolüne hiç gerek kalmayabilir.
+
 ---
 
 ## Bilinen sorunlar

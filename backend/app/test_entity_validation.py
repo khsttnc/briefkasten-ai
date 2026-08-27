@@ -708,6 +708,87 @@ class PaymentInformationVsDemandRegressionTestCase(unittest.TestCase):
         self.assertEqual(validate_explanatory_text(text, source), text)
 
 
+# The real reported production text (4th calibration of the payment-claim
+# check - see git history for the previous three): an AD Magazine /
+# Architectural Digest Germany advertorial insert. No amount, deadline, or
+# any German payment vocabulary anywhere in the source.
+AD_MAGAZINE_ADVERTORIAL_TEXT = (
+    "Bu belge, AD Magazine ve Architectural Digest Germany'in birlikte "
+    "yayınladığı bir girişimdir. Okuyucu, bu sayfada yer alan yazıyı "
+    "okuyup, bu özel sayının tema ve içerik hakkında bilgi sahibi "
+    "olmalıdır.\n"
+)
+
+# The model's own turkish_explanation for the document above - a NEGATED,
+# genuinely helpful sentence ("no need to apply or pay") that happens to
+# contain the "öde" stem. The old bare-substring check had no notion of
+# negation and dropped this entire, correct explanation.
+AD_MAGAZINE_TURKISH_EXPLANATION = (
+    "Bu belge, AD Magazine ve Architectural Digest Germany'in birlikte "
+    "yayınladığı bir girişimdir. Okuyucu, bu sayfada yer alan yazıyı "
+    "okuyup, bu özel sayının tema ve içerik hakkında bilgi sahibi "
+    "olmalıdır. Başvuru veya ödeme yapma gereksinimi yoktur."
+)
+
+
+class NegatedPaymentClaimRegressionTestCase(unittest.TestCase):
+    """Regression guard for the exact reported production bug: a negated
+    payment statement ("...ödeme yapma gereksinimi yoktur.") was treated
+    the same as a genuine payment demand purely because it contains the
+    "öde" stem, deleting an entire correct, helpful explanation. See
+    _PAYMENT_NEGATION_MARKERS_TR's comment for why this is a targeted
+    negation-marker list rather than the broader "must have an amount/
+    date" rule tried first - that broader rule silently reopened a
+    different, already-regression-tested incident (see
+    test_affirmative_payment_claim_without_amount_is_still_dropped
+    below)."""
+
+    def test_real_negated_payment_statement_is_kept(self):
+        self.assertEqual(
+            validate_explanatory_text(
+                AD_MAGAZINE_TURKISH_EXPLANATION, AD_MAGAZINE_ADVERTORIAL_TEXT
+            ),
+            AD_MAGAZINE_TURKISH_EXPLANATION,
+        )
+
+    def test_negated_payment_statement_alone_is_kept(self):
+        text = "Başvuru veya ödeme yapma gereksinimi yoktur."
+        self.assertEqual(
+            validate_explanatory_text(text, AD_MAGAZINE_ADVERTORIAL_TEXT), text
+        )
+
+    def test_action_summary_negated_payment_statement_is_kept(self):
+        # payment_requested=True with no source evidence exercises the
+        # _drop_if_unevidenced_payment_claim downgrade path directly - the
+        # downgrade itself is correct (no evidence), but the negated
+        # action_summary text must survive it rather than being deleted.
+        raw = {"payment_requested": True, "action_summary": "Ödeme yapmanıza gerek yoktur."}
+        result = validate_intelligence_signals(raw, AD_MAGAZINE_ADVERTORIAL_TEXT)
+        self.assertFalse(result["payment_requested"])
+        self.assertEqual(result["action_summary"], "Ödeme yapmanıza gerek yoktur.")
+
+    def test_affirmative_payment_claim_without_evidence_is_still_dropped(self):
+        # Sanity check that negation-detection didn't just become "always
+        # keep" - a genuine (here fabricated) AFFIRMATIVE claim with no
+        # negation marker must still be verified/dropped exactly as before.
+        text = "15 gün içinde ödeyin."
+        self.assertIsNone(
+            validate_explanatory_text(text, AD_MAGAZINE_ADVERTORIAL_TEXT)
+        )
+
+    def test_affirmative_payment_claim_without_amount_is_still_dropped(self):
+        # The exact case the concreteness-gate approach (an earlier
+        # attempt at this fix) got wrong: a vague, non-negated claim with
+        # NO amount/date at all must still be dropped without evidence -
+        # this is the real "Kredi kartı faturası ödeme talebi." incident
+        # (see test_pipeline_integration.FreeTextOnlyHallucinationPipelineTestCase),
+        # reproduced directly here as a permanent regression guard.
+        text = "Kredi kartı faturası ödeme talebi."
+        self.assertIsNone(
+            validate_explanatory_text(text, AD_MAGAZINE_ADVERTORIAL_TEXT)
+        )
+
+
 class DroppedFieldLoggingTestCase(unittest.TestCase):
     """A dropped field must be logged (field + rule, never the actual
     content) at WARNING - the level docker compose logs backend shows with

@@ -296,6 +296,51 @@ _PAYMENT_ACTION_VERBS_DE = (
 # prose.
 _PAYMENT_DEMAND_PHRASES_TR = ("öde",)
 
+# 4th calibration of this check (see git history for the previous three,
+# each a narrow fix for one false positive that risked reopening another).
+# Real production case: turkish_explanation for an AD Magazine/
+# Architectural Digest advertorial read "...Başvuru veya ödeme yapma
+# gereksinimi yoktur." ("...there is no need to apply or pay.") - a
+# NEGATED, genuinely helpful sentence that happens to contain the "öde"
+# stem. The bare substring check has no notion of negation and dropped
+# the entire (correct) explanation.
+#
+# A first attempt at fixing this tried a purely structural rule instead of
+# more keywords: "only treat 'öde' as a claim if an amount or a date/
+# day-count is also present" (the reasoning being that a claim asserting
+# nothing concrete can't mislead the reader). That rule broke an existing,
+# real-incident regression test: "Kredi kartı faturası ödeme talebi."
+# ("credit card bill payment request") - a genuinely fabricated claim on
+# an Antragsformular that never mentions payment at all - has no digit in
+# it either, yet must still be dropped. Concreteness alone doesn't
+# distinguish "no claim" from "vague but real claim"; only negation does.
+# So this stays a keyword list, deliberately narrow and TR-specific like
+# _PAYMENT_ACTION_VERBS_DE above - see TODO.md for why the real fix is
+# switching to a structured field (an explicit boolean/amount) instead of
+# parsing free text at all.
+_PAYMENT_NEGATION_MARKERS_TR = (
+    "gerek yok",
+    "gereksinimi yok",
+    "gerekmiyor",
+    "gerekmez",
+    "gerektirmez",
+    "gerekmemektedir",
+    "gerekmemektedirler",
+    "zorunlu değil",
+    "zorunluluğu yok",
+    "talep edilmemektedir",
+    "talep edilmiyor",
+    "istenmemektedir",
+    "bulunmamaktadır",
+    "içermemektedir",
+    "ücretsiz",
+)
+
+
+def _is_negated_payment_mention(value: str) -> bool:
+    lowered = value.lower()
+    return any(marker in lowered for marker in _PAYMENT_NEGATION_MARKERS_TR)
+
 
 def _has_payment_evidence(source_text: str) -> bool:
     # Verb-only - see _PAYMENT_ACTION_VERBS_DE's comment for why an amount
@@ -325,9 +370,13 @@ def _drop_if_unevidenced_payment_claim(
 ) -> Tuple[Optional[str], Optional[str]]:
     if not value:
         return value, None
-    if any(
-        phrase in value.lower() for phrase in _PAYMENT_DEMAND_PHRASES_TR
-    ) and not _has_payment_evidence(source_text):
+    if not any(phrase in value.lower() for phrase in _PAYMENT_DEMAND_PHRASES_TR):
+        return value, None
+    if _is_negated_payment_mention(value):
+        # "Ödeme yapmanıza gerek yoktur." states the OPPOSITE of a payment
+        # demand - see _PAYMENT_NEGATION_MARKERS_TR's comment.
+        return value, None
+    if not _has_payment_evidence(source_text):
         # Not attempting to surgically remove just the payment-related
         # clause from a free-form LLM sentence - that risks leaving a
         # grammatically broken or still-misleading remainder. Dropping the
@@ -382,6 +431,11 @@ def _drop_if_unverifiable_payment_narrative(
     if not value:
         return value, None
     if not any(phrase in value.lower() for phrase in _PAYMENT_DEMAND_PHRASES_TR):
+        return value, None
+    if _is_negated_payment_mention(value):
+        # Real production case: "...Başvuru veya ödeme yapma gereksinimi
+        # yoktur." (no application or payment needed) - see
+        # _PAYMENT_NEGATION_MARKERS_TR's comment.
         return value, None
 
     field_amounts = _extract_amounts(value)
