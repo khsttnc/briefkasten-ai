@@ -295,6 +295,88 @@ class IntelligenceSignalDateValidationTestCase(unittest.TestCase):
         self.assertEqual(validate_intelligence_signals(None, KUENDIGUNG_TEXT), {})
 
 
+# A real-shaped Widerrufsbestätigung (the app confirming the READER's own
+# cancellation, not a termination or a deadline notice) - only one absolute
+# date, and deliberately no relative-duration phrase anywhere. Used for the
+# reported production bug: the model hallucinated "innerhalb von 14 Tagen"
+# on a document with no deadline at all, and deadline_engine's otherwise-
+# correct Zustellfiktion math turned that into a confident, fabricated
+# exact date (2026-07-20 + 4 days Zustellfiktion + 14 days = 2026-08-07).
+ADAC_WIDERRUF_TEXT = (
+    "ADAC Autoversicherung AG\n"
+    "Datum 20. Juli 2026\n"
+    "Sehr geehrter Herr Mustermann,\n"
+    "hiermit bestaetigen wir den Widerruf Ihres Kfz-Versicherungsvertrags "
+    "wie von Ihnen gewuenscht. Der Vertrag gilt als nie zustande gekommen.\n"
+)
+
+
+class RelativeDeadlinePeriodValidationTestCase(unittest.TestCase):
+    """Regression guard for the reported production bug: a relative-
+    duration deadline_raw_text ("innerhalb von 14 Tagen") was never checked
+    against the source text at all before - only an embedded absolute date
+    was. A hallucinated relative period sailed straight through to
+    deadline_engine, which then computed a confident, fabricated exact date
+    via otherwise-correct Zustellfiktion math."""
+
+    def test_hallucinated_relative_period_with_no_basis_in_source_is_dropped(self):
+        raw = {"deadline_raw_text": "innerhalb von 14 Tagen", "document_date": "2026-07-20"}
+        result = validate_intelligence_signals(raw, ADAC_WIDERRUF_TEXT)
+        self.assertIsNone(result["deadline_raw_text"])
+        # document_date itself is genuine (in the source) and must survive
+        # independently of the unrelated deadline_raw_text drop.
+        self.assertEqual(result["document_date"], "2026-07-20")
+
+    def test_genuine_relative_period_in_source_is_kept(self):
+        # Sibling positive case - a document that DOES state a real
+        # relative deadline must not be caught by the same check.
+        result = validate_intelligence_signals(
+            {"deadline_raw_text": "innerhalb von 3 Tagen nach Zugang dieser Kündigung"},
+            KUENDIGUNG_TEXT,
+        )
+        self.assertEqual(
+            result["deadline_raw_text"], "innerhalb von 3 Tagen nach Zugang dieser Kündigung"
+        )
+
+    def test_paraphrased_relative_period_is_not_over_corrected(self):
+        # The model may reword rather than copy the source phrase verbatim
+        # (different trigger word here: "binnen" vs. the source's
+        # "innerhalb von") - only the amount+unit must match, not the
+        # whole phrase, or genuine deadlines worded differently would be
+        # wrongly dropped (the over-correction failure mode this was
+        # designed to avoid).
+        result = validate_intelligence_signals(
+            {"deadline_raw_text": "binnen 3 Tagen"}, KUENDIGUNG_TEXT
+        )
+        self.assertEqual(result["deadline_raw_text"], "binnen 3 Tagen")
+
+    def test_relative_period_split_across_a_line_wrap_is_still_found(self):
+        # Real incident class (see services._normalize_extracted_text):
+        # OCR/PDF text can carry a visible line-wrap hyphen splitting a
+        # word/number/unit across two lines.
+        hyphenated_text = (
+            "Kuendigung. Bitte melden Sie sich innerhalb von 3 Ta-\n"
+            "gen nach Zugang dieser Kuendigung.\n"
+        )
+        result = validate_intelligence_signals(
+            {"deadline_raw_text": "innerhalb von 3 Tagen"}, hyphenated_text
+        )
+        self.assertEqual(result["deadline_raw_text"], "innerhalb von 3 Tagen")
+
+    def test_unrelated_amount_and_unit_far_apart_do_not_satisfy_the_check(self):
+        # An amount and a unit word each appearing somewhere in a longer
+        # document, but nowhere near each other, must not coincidentally
+        # satisfy the proximity check.
+        far_apart_text = (
+            "Mitgliedsnummer 3. " + ("Fuellsatz. " * 30) + "Wir bieten Ihnen "
+            "guenstige Wochen an."
+        )
+        result = validate_intelligence_signals(
+            {"deadline_raw_text": "innerhalb von 3 Wochen"}, far_apart_text
+        )
+        self.assertIsNone(result["deadline_raw_text"])
+
+
 class PaymentRequestedValidationTestCase(unittest.TestCase):
     """Regression guard for the reported production bug: payment_requested
     coming back true, with an action_summary telling the reader to

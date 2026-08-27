@@ -1136,9 +1136,15 @@ class DocumentIntelligenceFullSignalPipelineTestCase(unittest.TestCase):
         # entity_validation.validate_intelligence_signals now drops any
         # document_date/deadline that isn't verifiable against the source,
         # and a dropped document_date would make the relative deadline
-        # below unresolvable (falls back to unknown_needs_review).
+        # below unresolvable (falls back to unknown_needs_review). Also
+        # includes "innerhalb von 14 Tagen", matching the provider's
+        # deadline_raw_text below - validate_intelligence_signals now also
+        # drops a relative-duration deadline_raw_text whose amount+unit
+        # doesn't actually appear anywhere in the source (see the
+        # hallucinated-"14 Tage" production incident).
         pdf_bytes = _build_sample_pdf_bytes(
-            "Aenderungsbescheid Jobcenter Berlin Mitte vom 10.01.2026"
+            "Aenderungsbescheid Jobcenter Berlin Mitte vom 10.01.2026. "
+            "Bitte melden Sie sich innerhalb von 14 Tagen."
         )
         document = services.save_document(
             FakeUploadFile("Aenderungsbescheid.pdf", pdf_bytes), self.db, owner_id=self.owner_id
@@ -1250,7 +1256,13 @@ class MultipleDeadlinesPipelineTestCase(unittest.TestCase):
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
     def test_multiple_deadlines_signal_downgrades_certainty_and_raises_priority(self):
-        pdf_bytes = _build_sample_pdf_bytes("Aenderungsbescheid mit zwei Fristen")
+        # Includes "innerhalb eines Monats", matching the provider's
+        # deadline_raw_text below - see the sibling Jobcenter test's
+        # comment for why this now has to actually appear in the source.
+        pdf_bytes = _build_sample_pdf_bytes(
+            "Aenderungsbescheid mit zwei Fristen. Widerspruch innerhalb "
+            "eines Monats nach Bekanntgabe."
+        )
         document = services.save_document(
             FakeUploadFile("Aenderungsbescheid.pdf", pdf_bytes), self.db, owner_id=self.owner_id
         )

@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Optional, Set
+from typing import Optional, Set, Tuple
 
 # --- Zustellfiktion (deemed-delivery) ---------------------------------
 # A written German administrative decision (Verwaltungsakt) sent by post is
@@ -171,6 +171,50 @@ def find_all_dates_in_text(text: str) -> Set[date]:
             continue
 
     return found
+
+
+def relative_period_amount_and_unit_family(
+    text: str,
+) -> Optional[Tuple[Set[str], Set[str]]]:
+    """Given a possible relative-duration phrase (e.g. a deadline_raw_text
+    value), returns (amount_alternatives, unit_alternatives) - every
+    textual form that would mean "the same amount" (digit and spelled-out,
+    for numbers 1-10) and "the same unit family" (every inflection of
+    day/week, or of month) - or None if text doesn't match a
+    relative-duration pattern at all.
+
+    Public so entity_validation.py can verify the amount+unit a relative
+    deadline_raw_text claims actually occurs somewhere in the source
+    document, independent of deadline resolution itself - real incident:
+    a hallucinated "innerhalb von 14 Tagen" with no basis anywhere in the
+    source drove resolve_deadline() to compute a fabricated exact date via
+    otherwise-correct Zustellfiktion math, because nothing checked whether
+    that phrase was genuine before computing from it.
+    """
+    match = _RELATIVE_RE.search(text)
+    if match is None:
+        return None
+
+    amount_raw = match.group("amount")
+    unit = match.group("unit").lower()
+
+    amount_alternatives = {amount_raw.lower()}
+    try:
+        resolved = _resolve_amount(amount_raw)
+        amount_alternatives.add(str(resolved))
+        for word, value in _SPELLED_AMOUNT_VALUES.items():
+            if value == resolved:
+                amount_alternatives.add(word)
+    except ValueError:
+        pass
+
+    if unit in _MONTH_UNITS:
+        unit_alternatives = set(_MONTH_UNITS)
+    else:
+        unit_days = _UNIT_TO_TIMEDELTA_DAYS[unit]
+        unit_alternatives = {u for u, days in _UNIT_TO_TIMEDELTA_DAYS.items() if days == unit_days}
+
+    return amount_alternatives, unit_alternatives
 
 
 def _parse_relative_duration_days(text: str) -> Optional[int]:

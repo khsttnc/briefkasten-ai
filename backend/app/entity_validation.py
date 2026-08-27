@@ -5,7 +5,11 @@ import re
 from datetime import date
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from .deadline_engine import find_all_dates_in_text, parse_absolute_date
+from .deadline_engine import (
+    find_all_dates_in_text,
+    parse_absolute_date,
+    relative_period_amount_and_unit_family,
+)
 from .document_intelligence import (
     ACTION_SUMMARY_KEY,
     DEADLINE_RAW_TEXT_KEY,
@@ -469,19 +473,89 @@ def _validate_date_string(
     return value, None
 
 
+# How far apart (in the whitespace-normalized source text) an amount and
+# its unit are allowed to be and still count as "the same relative-period
+# phrase" - wide enough for real inserted words ("innerhalb von 14 vollen
+# Kalendertagen") without being so wide that an unrelated amount and an
+# unrelated unit word, each appearing somewhere else in a long document,
+# could coincidentally satisfy it.
+_RELATIVE_PERIOD_PROXIMITY_CHARS = 40
+
+
+def _normalize_for_relative_period_search(text: str) -> str:
+    """Whitespace/hyphenation normalization for the amount+unit proximity
+    search below - independent of services._normalize_extracted_text
+    (which strips invisible formatting characters once at extraction
+    time; this runs on already-stored document.text, is local to this
+    check, and additionally joins a VISIBLE hyphen at a line-wrap point,
+    e.g. "Versicherungsbe-\\nstätigung" - the same real incident class,
+    just the visible-hyphen OCR/PDF line-wrap case instead of the
+    invisible-soft-hyphen one)."""
+    text = re.sub(r"-\s*\n\s*", "", text)
+    return re.sub(r"\s+", " ", text)
+
+
+def _relative_period_present_in_source(value: str, source_text: str) -> bool:
+    """Loosely (not phrase-for-phrase) checks whether the amount+unit a
+    relative-duration deadline_raw_text claims (e.g. "14" + "Tage" for
+    "innerhalb von 14 Tagen") actually occurs together somewhere in the
+    source document - regardless of which trigger word
+    (innerhalb/binnen/spätestens) or connecting wording was used, since
+    the model may paraphrase rather than copy the source verbatim. A
+    strict full-phrase match would drop genuine deadlines the model
+    reworded; this only requires the number and the unit family to appear
+    within a short distance of each other somewhere in the text.
+    """
+    alternatives = relative_period_amount_and_unit_family(value)
+    if alternatives is None:
+        # Not a relative-duration phrase this check knows how to verify
+        # (e.g. unparseable text) - resolve_deadline()'s own
+        # unknown_needs_review fallback already handles that case safely,
+        # nothing for this check to add.
+        return True
+
+    amount_alternatives, unit_alternatives = alternatives
+    normalized_source = _normalize_for_relative_period_search(source_text)
+
+    amount_positions = [
+        match.start()
+        for alt in amount_alternatives
+        for match in re.finditer(rf"\b{re.escape(alt)}\b", normalized_source, re.IGNORECASE)
+    ]
+    unit_positions = [
+        match.start()
+        for alt in unit_alternatives
+        for match in re.finditer(rf"\b{re.escape(alt)}\b", normalized_source, re.IGNORECASE)
+    ]
+
+    return any(
+        abs(a - u) <= _RELATIVE_PERIOD_PROXIMITY_CHARS
+        for a in amount_positions
+        for u in unit_positions
+    )
+
+
 def _validate_deadline_raw_text(
-    value: Any, source_dates: Set[date]
+    value: Any, source_dates: Set[date], source_text: str
 ) -> Tuple[Optional[str], Optional[str]]:
     if not _is_verifiable_value(value):
         return None, None
+
     absolute_date = parse_absolute_date(value)
-    if absolute_date is None:
-        # A relative phrase ("innerhalb von 14 Tagen") or one that doesn't
-        # parse at all - no literal date to verify here, so it's left to
-        # resolve_deadline()'s own existing fail-closed handling.
+    if absolute_date is not None:
+        if absolute_date not in source_dates:
+            return None, "date_not_in_source"
         return value, None
-    if absolute_date not in source_dates:
-        return None, "date_not_in_source"
+
+    # No absolute date embedded - either a relative-duration phrase
+    # ("innerhalb von 14 Tagen") or text matching neither pattern at all.
+    # Real incident this fixes: a hallucinated "14 Tage" phrase with no
+    # basis anywhere in the source drove deadline_engine to compute a
+    # fabricated exact date via otherwise-correct Zustellfiktion math -
+    # resolve_deadline() has no way to know the phrase itself was
+    # invented, only this check (which has the source text) can.
+    if not _relative_period_present_in_source(value, source_text):
+        return None, "relative_period_not_in_source"
     return value, None
 
 
@@ -515,7 +589,7 @@ def validate_intelligence_signals(
     validated = dict(raw_response)
 
     deadline_raw_text, reason = _validate_deadline_raw_text(
-        raw_response.get(DEADLINE_RAW_TEXT_KEY), source_dates
+        raw_response.get(DEADLINE_RAW_TEXT_KEY), source_dates, text
     )
     if reason:
         logger.warning("validation: deadline_raw_text dropped (%s)", reason)
