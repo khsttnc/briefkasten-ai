@@ -61,20 +61,34 @@ NVIDIA_API_KEY_ENV = "NVIDIA_API_KEY"
 NVIDIA_MODEL_ENV = "NVIDIA_MODEL"
 NVIDIA_BASE_URL_ENV = "NVIDIA_BASE_URL"
 DEFAULT_NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
-# Switched from nvidia/nemotron-3-nano-30b-a3b 2026-08-26 after a real-API
-# consistency comparison (5 calls each, same fixed multi-signal document,
-# temperature=0/top_p=0.1 - see providers/nvidia_provider.py's
-# DEFAULT_TEMPERATURE comment for the full methodology): nemotron produced
-# a different turkish_explanation on every call, and in production a
-# reported instance had an outright content error (an inverted attachment
-# instruction). gpt-oss-120b's 5 calls were still lexically different
-# (paraphrase task, expected) but semantically identical every time - same
-# amount, same date, same deadlines, same required actions, no
-# contradictions - which is what actually matters for the reported bug.
-# Same NVIDIA free tier, no cost change. llama-3.3-70b-instruct (the other
-# candidate) reached end of life on NVIDIA's API on 2026-08-26 and could
-# not be tested.
-DEFAULT_NVIDIA_MODEL = "openai/gpt-oss-120b"
+# Switched BACK to nvidia/nemotron-3-nano-30b-a3b on 2026-08-27 after a real
+# production complaint: a 4980-character CV analysis took 50s and hit the
+# frontend's 60s timeout. Real-API latency measurement (see
+# providers/nvidia_provider.py's REPETITION_LOOP_MIN_RUN comment for the
+# retry mitigation this motivated) across 2K/5K/15K-char documents found
+# gpt-oss-120b's latency has NO relationship to input size and is not
+# reliably under any useful bound: 40.7s @ 2K, >120s TIMEOUT @ 5K
+# (reproducing the reported bug), 9.1s @ 15K - reasoning_effort=low (the
+# lowest setting this model accepts) still leaves the reasoning-token spend
+# effectively unbounded per-request. Three other free-tier candidates were
+# also measured live and rejected: llama-3.3-70b-instruct returned HTTP 410
+# ("reached its end of life on 2026-08-26T09:00:00Z") - confirmed gone, not
+# just documented as retired; mistral-nemotron was consistent once warm
+# (14.6-17.7s across 5K/15K) but timed out (>120s) both times at 2K with no
+# explanation found; nemotron-3.5-lightning-30b-a3b ranged 12.4-55.9s with
+# no correlation to input size despite being marketed as "fastest 30B";
+# google/gemma-4-31b-it timed out on all 6 real calls attempted (2K/5K/15K
+# x2) - not merely slow, effectively non-functional against this endpoint
+# in this test. nemotron-3-nano-30b-a3b remained the fastest of everything
+# tested when it worked (3.5-4.9s at 2K/5K) - its own known failure mode
+# (a token-repetition loop on some fraction of calls, see TODO.md and
+# nvidia_provider.py) is real (2 of 4 real 15K-char calls hit it in this
+# round) but resolves in a single clean retry rather than an indefinite
+# hang, which is a better user-facing failure shape than gpt-oss-120b's
+# unpredictable multi-minute stalls. Turkish free-text wording is still not
+# word-for-word deterministic on this model (see TODO.md) - unchanged by
+# this switch, orthogonal to the latency problem being fixed here.
+DEFAULT_NVIDIA_MODEL = "nvidia/nemotron-3-nano-30b-a3b"
 
 # Supabase Auth issues user JWTs signed with the project's asymmetric
 # (ES256/P-256) signing key. auth.py verifies them against the public key

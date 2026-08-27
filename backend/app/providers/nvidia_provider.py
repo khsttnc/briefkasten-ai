@@ -163,6 +163,34 @@ def _load_json_safe(text: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+# Measured, not guessed, against the live API (2026-08-27, 4 real calls
+# against the same 15,000-character multi-signal document): nemotron
+# intermittently locks into a token-repetition loop and burns the entire
+# max_tokens budget on it - 2 of 4 calls repeated a single word (e.g.
+# "artig") 1983 times consecutively, always paired with
+# finish_reason == "length". The other 2 calls succeeded normally with a
+# longest consecutive-repeat run of 1 - i.e. real answers never come close
+# to this threshold, so 10 is a wide, false-positive-free margin rather
+# than a value needing per-document tuning. Retried once on detection (see
+# NvidiaProvider._send_request) rather than failing immediately, since the
+# failure was observed to be transient (the very next call on the same
+# input succeeded).
+REPETITION_LOOP_MIN_RUN = 10
+
+
+def _has_repetition_loop(text: str, min_run: int = REPETITION_LOOP_MIN_RUN) -> bool:
+    words = text.split()
+    run = 1
+    for previous, current in zip(words, words[1:]):
+        if current == previous:
+            run += 1
+            if run >= min_run:
+                return True
+        else:
+            run = 1
+    return False
+
+
 def _strip_reasoning_blocks(text: str) -> str:
     # Reasoning-capable NIM models (e.g. Nemotron) can emit a <think>...</think>
     # chain-of-thought block ahead of the actual JSON answer even when not
@@ -202,6 +230,65 @@ class NvidiaProvider(BaseAIProvider):
         return self._send_request(prompt)
 
     def _send_request(self, prompt: str) -> AIAnalysisResult:
+        outcome = self._call_api(prompt)
+        if isinstance(outcome, AIAnalysisResult):
+            return outcome
+
+        finish_reason, raw_text, parsed_response = outcome
+        if finish_reason == "length" or _has_repetition_loop(raw_text):
+            # Transient failure (see REPETITION_LOOP_MIN_RUN's comment): the
+            # same request was observed to succeed on a very next call
+            # against the same input, so one retry is attempted before
+            # surfacing an error to the user.
+            outcome = self._call_api(prompt)
+            if isinstance(outcome, AIAnalysisResult):
+                return outcome
+            finish_reason, raw_text, parsed_response = outcome
+            if finish_reason == "length" or _has_repetition_loop(raw_text):
+                return AIAnalysisResult(
+                    error_message=(
+                        "NVIDIA response was cut off before completing (hit the "
+                        "token limit, possibly stuck in a repetition loop) even "
+                        "after one retry - the analysis is incomplete and was "
+                        "not used."
+                    ),
+                    raw_response=parsed_response,
+                )
+
+        if not raw_text:
+            return AIAnalysisResult(
+                error_message="NVIDIA response did not contain any content.",
+                raw_response=parsed_response,
+            )
+
+        raw_text = _strip_reasoning_blocks(raw_text)
+
+        parsed = _load_json_safe(raw_text)
+        if parsed is None:
+            return AIAnalysisResult(
+                error_message="Unable to parse NVIDIA response as valid JSON.",
+                raw_response={"raw_text": raw_text},
+            )
+
+        return AIAnalysisResult(
+            document_type=parsed.get("document_type"),
+            language=parsed.get("language"),
+            summary=parsed.get("summary"),
+            turkish_explanation=parsed.get("turkish_explanation"),
+            important_dates=parsed.get("important_dates"),
+            extracted_entities=parsed.get("extracted_entities"),
+            raw_response=parsed,
+        )
+
+    def _call_api(
+        self, prompt: str
+    ) -> "AIAnalysisResult | tuple[Optional[str], str, Dict[str, Any]]":
+        """One HTTP round-trip. Returns a terminal AIAnalysisResult for a
+        network/HTTP/envelope-level failure (never retried), or
+        (finish_reason, raw_text, parsed_response) for a completed HTTP
+        response whose content is still subject to the caller's
+        length/repetition-loop retry decision.
+        """
         payload: Dict[str, Any] = {
             "model": self._model,
             "messages": [{"role": "user", "content": prompt}],
@@ -283,43 +370,4 @@ class NvidiaProvider(BaseAIProvider):
                     if isinstance(content, str):
                         raw_text = content
 
-        # Fail closed on a response cut off by the token limit: an
-        # incomplete JSON object may fail to parse (already handled below)
-        # but could also, by coincidence, close its braces/strings exactly
-        # where generation was cut and parse as valid-but-incomplete JSON -
-        # silently accepting that would mean acting on content the model
-        # never actually finished producing. Checked before any attempt to
-        # use raw_text, regardless of whether it happens to parse.
-        if finish_reason == "length":
-            return AIAnalysisResult(
-                error_message=(
-                    "NVIDIA response was cut off before completing (hit the "
-                    "token limit) - the analysis is incomplete and was not used."
-                ),
-                raw_response=parsed_response,
-            )
-
-        if not raw_text:
-            return AIAnalysisResult(
-                error_message="NVIDIA response did not contain any content.",
-                raw_response=parsed_response,
-            )
-
-        raw_text = _strip_reasoning_blocks(raw_text)
-
-        parsed = _load_json_safe(raw_text)
-        if parsed is None:
-            return AIAnalysisResult(
-                error_message="Unable to parse NVIDIA response as valid JSON.",
-                raw_response={"raw_text": raw_text},
-            )
-
-        return AIAnalysisResult(
-            document_type=parsed.get("document_type"),
-            language=parsed.get("language"),
-            summary=parsed.get("summary"),
-            turkish_explanation=parsed.get("turkish_explanation"),
-            important_dates=parsed.get("important_dates"),
-            extracted_entities=parsed.get("extracted_entities"),
-            raw_response=parsed,
-        )
+        return finish_reason, raw_text, parsed_response

@@ -5,7 +5,12 @@ import urllib.error
 
 from .. import document_intelligence
 from ..ai_service import AIAnalysisResult
-from .nvidia_provider import NvidiaProvider, _build_nvidia_prompt, _load_json_safe
+from .nvidia_provider import (
+    NvidiaProvider,
+    _build_nvidia_prompt,
+    _has_repetition_loop,
+    _load_json_safe,
+)
 
 
 class DummyResponse:
@@ -58,6 +63,29 @@ class TestLoadJsonSafe(unittest.TestCase):
         self.assertIsNone(_load_json_safe('prefix { not valid json } suffix'))
 
 
+class TestHasRepetitionLoop(unittest.TestCase):
+    def test_normal_json_content_is_not_flagged(self):
+        # Measured against real API responses: successful calls had a
+        # longest consecutive-repeat run of 1 - ordinary repeated words
+        # (not consecutive) must not trip this.
+        content = json.dumps({
+            "extracted_entities": [
+                {"type": "policy_number", "value": "1"},
+                {"type": "customer_number", "value": "2"},
+            ]
+        })
+        self.assertFalse(_has_repetition_loop(content))
+
+    def test_long_consecutive_repeat_is_flagged(self):
+        # Reproduces a real failure: a single word repeated ~2000 times.
+        degenerate = '{"summary": "' + ("artig " * 50) + '"}'
+        self.assertTrue(_has_repetition_loop(degenerate))
+
+    def test_short_repeat_run_under_threshold_is_not_flagged(self):
+        content = "artig artig artig normal text continues here"
+        self.assertFalse(_has_repetition_loop(content))
+
+
 class TestNvidiaProvider(unittest.TestCase):
     def test_build_prompt_contains_expected_fields(self):
         prompt = _build_nvidia_prompt("Das ist ein Testdokument.")
@@ -107,16 +135,22 @@ class TestNvidiaProvider(unittest.TestCase):
         self.assertEqual(result.important_dates, ["2026-08-08"])
         self.assertEqual(result.extracted_entities, [{"name": "Firma"}])
 
-    @patch.dict("os.environ", {"NVIDIA_API_KEY": "test-key"})
+    @patch.dict(
+        "os.environ", {"NVIDIA_API_KEY": "test-key", "NVIDIA_MODEL": "openai/gpt-oss-120b"}
+    )
     @patch("backend.app.providers.nvidia_provider.urllib.request.urlopen")
-    def test_gpt_oss_default_model_gets_reasoning_effort_not_chat_template_kwargs(
+    def test_gpt_oss_model_gets_reasoning_effort_not_chat_template_kwargs(
         self, mock_urlopen
     ):
         # Regression guard: chat_template_kwargs.thinking is a nemotron-only
-        # NIM chat-template toggle, silently ignored by gpt-oss models (the
-        # current default - see config.DEFAULT_NVIDIA_MODEL) - a real API
-        # call confirmed it has no effect there. gpt-oss's own reasoning
-        # control is the separate reasoning_effort parameter instead.
+        # NIM chat-template toggle, silently ignored by gpt-oss models - a
+        # real API call confirmed it has no effect there. gpt-oss's own
+        # reasoning control is the separate reasoning_effort parameter
+        # instead. Pinned via NVIDIA_MODEL rather than relying on the
+        # provider's default, which was switched back to nemotron on
+        # 2026-08-27 (see config.DEFAULT_NVIDIA_MODEL) - this guard is about
+        # gpt-oss's own request shape, independent of which model is
+        # currently the default.
         content = json.dumps({"document_type": "letter"})
         raw_json = json.dumps({"choices": [{"message": {"content": content}}]})
         mock_urlopen.return_value = DummyResponse(raw_json)
@@ -234,6 +268,60 @@ class TestNvidiaProvider(unittest.TestCase):
 
         self.assertIsNotNone(result.error_message)
         self.assertIn("cut off", result.error_message)
+
+    @patch.dict("os.environ", {"NVIDIA_API_KEY": "test-key"})
+    @patch("backend.app.providers.nvidia_provider.urllib.request.urlopen")
+    def test_length_cutoff_retries_once_and_succeeds_on_second_attempt(self, mock_urlopen):
+        # The transient-failure case this retry exists for: first attempt
+        # hits the token limit, the identical retry succeeds normally.
+        cut_off = _openai_style_response('{"document_type": "Besch', finish_reason="length")
+        succeeds = _openai_style_response(
+            json.dumps({"document_type": "Bescheid"}), finish_reason="stop"
+        )
+        mock_urlopen.side_effect = [DummyResponse(cut_off), DummyResponse(succeeds)]
+
+        provider = NvidiaProvider()
+        result = provider.analyze_document("Test text")
+
+        self.assertEqual(mock_urlopen.call_count, 2)
+        self.assertIsNone(result.error_message)
+        self.assertEqual(result.document_type, "Bescheid")
+
+    @patch.dict("os.environ", {"NVIDIA_API_KEY": "test-key"})
+    @patch("backend.app.providers.nvidia_provider.urllib.request.urlopen")
+    def test_length_cutoff_on_both_attempts_is_a_clean_final_failure(self, mock_urlopen):
+        cut_off = _openai_style_response('{"document_type": "Besch', finish_reason="length")
+        mock_urlopen.side_effect = [DummyResponse(cut_off), DummyResponse(cut_off)]
+
+        provider = NvidiaProvider()
+        result = provider.analyze_document("Test text")
+
+        self.assertEqual(mock_urlopen.call_count, 2)
+        self.assertIsNotNone(result.error_message)
+        self.assertIn("cut off", result.error_message)
+        self.assertIsNone(result.document_type)
+
+    @patch.dict("os.environ", {"NVIDIA_API_KEY": "test-key"})
+    @patch("backend.app.providers.nvidia_provider.urllib.request.urlopen")
+    def test_repetition_loop_without_length_also_triggers_retry(self, mock_urlopen):
+        # Real observed shape: finish_reason == "length" always co-occurred
+        # with the repetition loop in live testing, but the two are
+        # detected independently - a repetition loop reported as "stop" by
+        # the API must still be caught and retried.
+        looping = _openai_style_response(
+            '{"summary": "' + ("artig " * 50) + '"}', finish_reason="stop"
+        )
+        succeeds = _openai_style_response(
+            json.dumps({"document_type": "Bescheid"}), finish_reason="stop"
+        )
+        mock_urlopen.side_effect = [DummyResponse(looping), DummyResponse(succeeds)]
+
+        provider = NvidiaProvider()
+        result = provider.analyze_document("Test text")
+
+        self.assertEqual(mock_urlopen.call_count, 2)
+        self.assertIsNone(result.error_message)
+        self.assertEqual(result.document_type, "Bescheid")
 
     @patch.dict("os.environ", {"NVIDIA_API_KEY": "test-key"})
     @patch("backend.app.providers.nvidia_provider.urllib.request.urlopen")
