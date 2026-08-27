@@ -239,7 +239,7 @@ def _ensure_document_analyzed(document: Document, db: Session) -> dict:
         return {
             "filename": document.filename,
             "characters": document.character_count,
-            "text": document.text[:1000],
+            "text": document.text,
         }
 
     if not os.path.exists(document.filepath):
@@ -290,10 +290,18 @@ def _ensure_document_analyzed(document: Document, db: Session) -> dict:
     db.commit()
     db.refresh(document)
 
+    # "text" used to be silently sliced to the first 1000 characters here,
+    # with no indication to the caller that it was a preview - the
+    # "characters" count above was always the full, untruncated count, so a
+    # document over 1000 chars looked like its text had gone missing. The
+    # stored document.text was always complete; only this response was
+    # cropped. Send the full text now that the frontend renders it in a
+    # scrollable block (see .text-block in styles.css) instead of assuming
+    # it's short.
     return {
         "filename": document.filename,
         "characters": document.character_count,
-        "text": document.text[:1000],
+        "text": document.text,
     }
 
 
