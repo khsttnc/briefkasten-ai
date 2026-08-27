@@ -133,6 +133,30 @@ def _multiple_deadlines_action_summary() -> str:
     )
 
 
+# Appended (not a replacement) whenever
+# document_processing.detect_possible_multiple_documents flagged the source
+# text before analysis - distinct from the multiple-deadlines override
+# above, which is the LLM's own within-one-document judgment. This one
+# fires from the deterministic pre-check regardless of what the LLM
+# concluded, so the reader gets a concrete warning even on a model that
+# ignored the prompt's multi-document hint entirely (see
+# providers/ollama_provider.py's possible_multiple_documents parameter).
+_MULTIPLE_DOCUMENTS_ACTION_SUMMARY_BY_LANGUAGE = {
+    "Turkish": (
+        "Not: Bu belgede birden fazla ayrı belge/işlem olabilir (örn. "
+        "birkaç farklı ekstre veya mektup); lütfen her birini ayrı ayrı "
+        "kontrol edin."
+    ),
+}
+
+
+def _multiple_documents_action_summary() -> str:
+    return _MULTIPLE_DOCUMENTS_ACTION_SUMMARY_BY_LANGUAGE.get(
+        OUTPUT_LANGUAGE_NAME,
+        _MULTIPLE_DOCUMENTS_ACTION_SUMMARY_BY_LANGUAGE["Turkish"],
+    )
+
+
 # Appended (not a replacement, unlike the multiple-deadlines override above)
 # to action_summary whenever the source text was too long to send to the AI
 # provider in full (see document_processing.MAX_ANALYSIS_TEXT_CHARS) - the
@@ -194,7 +218,10 @@ def _safe_defaults() -> Dict[str, Any]:
 
 
 def derive_intelligence_fields(
-    raw_response: Optional[Dict[str, Any]], *, text_truncated: bool = False
+    raw_response: Optional[Dict[str, Any]],
+    *,
+    text_truncated: bool = False,
+    possible_multiple_documents: bool = False,
 ) -> Dict[str, Any]:
     """Returns a dict of Document column values, ready to assign via setattr.
 
@@ -211,6 +238,13 @@ def derive_intelligence_fields(
     saw - same fail-closed spirit as an unparseable deadline phrase, this
     caps deadline_certainty at "estimated" (never "exact") and appends a
     review note to action_summary, regardless of what the LLM returned.
+
+    possible_multiple_documents: True when
+    document_processing.detect_possible_multiple_documents flagged the
+    source text before it was ever sent to the AI provider. Appends a
+    warning note to action_summary unconditionally - independent of
+    whatever the LLM itself concluded about multiple_deadlines_detected -
+    so the reader is told even if the model ignored the prompt's hint.
     """
     try:
         payload = raw_response if isinstance(raw_response, dict) else {}
@@ -238,6 +272,9 @@ def derive_intelligence_fields(
         )
         if text_truncated and deadline.deadline_certainty == "exact":
             deadline = replace(deadline, deadline_certainty="estimated")
+        if possible_multiple_documents:
+            note = _multiple_documents_action_summary()
+            action_summary = f"{action_summary} {note}" if action_summary else note
         if text_truncated:
             note = _truncation_action_summary_note()
             action_summary = f"{action_summary} {note}" if action_summary else note

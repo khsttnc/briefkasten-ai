@@ -32,7 +32,12 @@ from .entity_validation import (
 from .models import Document, DocumentAIAnalysis
 from .priority_engine import LEVEL_ORDER
 from .providers.provider_factory import get_ai_provider
-from .document_processing import DocumentProcessingOrchestrator, is_text_truncated_for_analysis
+from .document_processing import (
+    PAGE_SEPARATOR,
+    DocumentProcessingOrchestrator,
+    detect_possible_multiple_documents,
+    is_text_truncated_for_analysis,
+)
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
@@ -226,7 +231,7 @@ def extract_text_with_ocr(filepath: str) -> str:
     finally:
         doc.close()
 
-    return _normalize_extracted_text("\n".join(pages_text))
+    return _normalize_extracted_text(PAGE_SEPARATOR.join(pages_text))
 
 
 def _ensure_document_analyzed(document: Document, db: Session) -> dict:
@@ -255,9 +260,12 @@ def _ensure_document_analyzed(document: Document, db: Session) -> dict:
 
     try:
         _validate_page_limits(doc)
-        text = ""
-        for page in doc:
-            text += page.get_text()
+        # Was `text += page.get_text()` with no separator at all, which
+        # could glue the last word of one page to the first word of the
+        # next - PAGE_SEPARATOR fixes that and matches the OCR path below,
+        # which already joined pages with a delimiter.
+        page_texts = [page.get_text() for page in doc]
+        text = PAGE_SEPARATOR.join(t for t in page_texts if t and t.strip())
     except HTTPException:
         raise
     except Exception as exc:
@@ -452,7 +460,10 @@ def analyze_document_ai_by_id(
         )
 
     orchestrator = DocumentProcessingOrchestrator(provider)
-    analysis_result = orchestrator.run(document.text or "")
+    possible_multiple_documents = detect_possible_multiple_documents(document.text or "")
+    analysis_result = orchestrator.run(
+        document.text or "", possible_multiple_documents=possible_multiple_documents
+    )
 
     # Deterministic safety net: drop any code/number/date entity whose value
     # cannot be verified against the source text, before it is persisted or
@@ -513,7 +524,11 @@ def analyze_document_ai_by_id(
         # the reader - see entity_validation.validate_intelligence_signals.
         verified_signals = validate_intelligence_signals(raw_response, document.text or "")
         text_truncated = is_text_truncated_for_analysis(document.character_count)
-        intelligence_fields = derive_intelligence_fields(verified_signals, text_truncated=text_truncated)
+        intelligence_fields = derive_intelligence_fields(
+            verified_signals,
+            text_truncated=text_truncated,
+            possible_multiple_documents=possible_multiple_documents,
+        )
         for field_name, field_value in intelligence_fields.items():
             setattr(document, field_name, field_value)
         db.add(document)

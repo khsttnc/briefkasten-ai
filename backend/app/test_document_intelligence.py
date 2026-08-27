@@ -232,6 +232,44 @@ class TextTruncatedTestCase(unittest.TestCase):
         self.assertIn("çok uzun", fields["action_summary"])
 
 
+class PossibleMultipleDocumentsTestCase(unittest.TestCase):
+    """Regression test for: a single PDF containing several separate
+    documents (e.g. 4 Advanzia Bank Kontoauszug statements plus an
+    unrelated form) was analyzed as if it were only the first document -
+    document_processing.detect_possible_multiple_documents flags this
+    before analysis, and this note must reach the reader regardless of
+    what the LLM itself concluded about multiple_deadlines_detected."""
+
+    def test_action_summary_gets_multiple_documents_note_appended(self):
+        fields = derive_intelligence_fields(
+            {"action_summary": "Rechnung bezahlen."}, possible_multiple_documents=True
+        )
+        self.assertIn("Rechnung bezahlen.", fields["action_summary"])
+        self.assertIn("ayrı belge", fields["action_summary"])
+
+    def test_action_summary_gets_note_even_when_llm_said_nothing(self):
+        fields = derive_intelligence_fields({}, possible_multiple_documents=True)
+        self.assertIsNotNone(fields["action_summary"])
+        self.assertIn("ayrı belge", fields["action_summary"])
+
+    def test_no_note_when_not_flagged(self):
+        fields = derive_intelligence_fields({"action_summary": "Rechnung bezahlen."})
+        self.assertEqual(fields["action_summary"], "Rechnung bezahlen.")
+
+    def test_composes_with_multiple_deadlines_override_and_truncation_note(self):
+        fields = derive_intelligence_fields(
+            {
+                "action_summary": "irrelevant, will be overridden",
+                "multiple_deadlines_detected": True,
+            },
+            possible_multiple_documents=True,
+            text_truncated=True,
+        )
+        self.assertIn("dikkatlice kontrol edin", fields["action_summary"])
+        self.assertIn("ayrı belge", fields["action_summary"])
+        self.assertIn("çok uzun", fields["action_summary"])
+
+
 class EngineFailureIsolationTestCase(unittest.TestCase):
     """Even if a downstream engine misbehaves unexpectedly, this module must
     still return a safe, complete result rather than propagate."""

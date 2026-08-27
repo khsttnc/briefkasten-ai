@@ -221,8 +221,12 @@ class NvidiaProvider(BaseAIProvider):
     def model_name(self) -> str:
         return self._model
 
-    def analyze_document(self, text: str) -> AIAnalysisResult:
-        prompt = _build_nvidia_prompt(text)
+    def analyze_document(
+        self, text: str, *, possible_multiple_documents: bool = False
+    ) -> AIAnalysisResult:
+        prompt = _build_nvidia_prompt(
+            text, possible_multiple_documents=possible_multiple_documents
+        )
         return self._send_request(prompt)
 
     def analyze_document_with_task(self, text: str, task: str) -> AIAnalysisResult:

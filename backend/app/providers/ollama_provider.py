@@ -145,7 +145,33 @@ def _parse_ollama_streaming_response(text: str) -> Optional[str]:
     return None
 
 
-def _build_ollama_prompt(text: str, task: Optional[str] = None) -> str:
+_MULTIPLE_DOCUMENTS_HINT = (
+    "\nIMPORTANT: an automated pre-check on this text suggests it may "
+    "actually contain more than one separate document concatenated "
+    "together (for example several separate monthly account statements, "
+    "or one form plus several unrelated letters), rather than a single "
+    "one. This is only a heuristic guess, not a certainty - judge for "
+    "yourself from the text itself. If you do find more than one distinct "
+    "document: list every distinct due date/deadline you can find across "
+    "ALL of them (not just the first) in important_dates; make summary "
+    "and turkish_explanation mention every distinct document/statement "
+    "you found and its own date and amount, not just the first one; and "
+    f"set {MULTIPLE_DEADLINES_DETECTED_KEY} to true so the reader is "
+    "warned to check all of them carefully. The single-value fields "
+    f"({SENDER_CATEGORY_KEY}, {SENDER_INSTITUTION_KEY}, "
+    f"{CLASSIFIED_DOCUMENT_TYPE_KEY}, {DEADLINE_RAW_TEXT_KEY}) can still "
+    "only describe one document - use whichever one seems most prominent "
+    "or most legally significant, the same way you already choose between "
+    "multiple deadlines within a single document.\n"
+)
+
+
+def _build_ollama_prompt(
+    text: str,
+    task: Optional[str] = None,
+    *,
+    possible_multiple_documents: bool = False,
+) -> str:
     if task == "classification":
         return (
             "You are an AI assistant analyzing a German official or corporate document. "
@@ -371,6 +397,7 @@ def _build_ollama_prompt(text: str, task: Optional[str] = None) -> str:
         f"{OUTPUT_LANGUAGE_NAME.upper()}, of what the reader needs to do. Use null if "
         f"{REQUIRES_ACTION_KEY} is false. "
         "Do not include any additional text or explanation. "
+        f"{_MULTIPLE_DOCUMENTS_HINT if possible_multiple_documents else ''}"
         f"Text:\n{text}\n"
     )
 
@@ -495,8 +522,12 @@ class OllamaProvider(BaseAIProvider):
             raw_response=parsed,
         )
 
-    def analyze_document(self, text: str) -> AIAnalysisResult:
-        prompt = _build_ollama_prompt(text)
+    def analyze_document(
+        self, text: str, *, possible_multiple_documents: bool = False
+    ) -> AIAnalysisResult:
+        prompt = _build_ollama_prompt(
+            text, possible_multiple_documents=possible_multiple_documents
+        )
         return self._send_request(prompt)
 
     def analyze_document_with_task(self, text: str, task: str) -> AIAnalysisResult:

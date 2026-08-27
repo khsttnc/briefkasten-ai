@@ -21,7 +21,9 @@ class AIProvider(Protocol):
     provider_name: str
     model_name: str
 
-    def analyze_document(self, text: str) -> AIAnalysisResult:
+    def analyze_document(
+        self, text: str, *, possible_multiple_documents: bool = False
+    ) -> AIAnalysisResult:
         ...
 
 
@@ -37,7 +39,9 @@ class BaseAIProvider(abc.ABC):
         ...
 
     @abc.abstractmethod
-    def analyze_document(self, text: str) -> AIAnalysisResult:
+    def analyze_document(
+        self, text: str, *, possible_multiple_documents: bool = False
+    ) -> AIAnalysisResult:
         ...
 
 
@@ -45,8 +49,20 @@ class AIService:
     def __init__(self, provider: AIProvider):
         self.provider = provider
 
-    def analyze(self, text: str, task: Optional[str] = None) -> AIAnalysisResult:
+    def analyze(
+        self,
+        text: str,
+        task: Optional[str] = None,
+        *,
+        possible_multiple_documents: bool = False,
+    ) -> AIAnalysisResult:
+        # possible_multiple_documents only applies to the default
+        # full-analysis prompt (task=None) - the task-specific mini-prompts
+        # (classification/extraction/explanation) are narrow single-field
+        # extractions where the hint has no schema field to feed into.
         analyze_with_task = getattr(self.provider, "analyze_document_with_task", None)
         if task is not None and callable(analyze_with_task):
             return analyze_with_task(text, task)
-        return self.provider.analyze_document(text)
+        return self.provider.analyze_document(
+            text, possible_multiple_documents=possible_multiple_documents
+        )

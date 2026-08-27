@@ -47,7 +47,7 @@ class DummyAIProvider:
     provider_name = "dummy"
     model_name = "dummy-model"
 
-    def analyze_document(self, text: str) -> AIAnalysisResult:
+    def analyze_document(self, text: str, **kwargs) -> AIAnalysisResult:
         return AIAnalysisResult(
             document_type="letter",
             language="de",

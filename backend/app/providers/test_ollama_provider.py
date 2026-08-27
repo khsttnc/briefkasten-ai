@@ -198,6 +198,26 @@ class TestBuildOllamaPrompt(unittest.TestCase):
         self.assertIn("TURKISH", prompt)
         self.assertIn("what the reader should do next", prompt)
 
+    def test_possible_multiple_documents_hint_absent_by_default(self):
+        prompt = _build_ollama_prompt("Some German document text")
+        self.assertNotIn("more than one separate document", prompt)
+
+    def test_possible_multiple_documents_hint_added_when_flagged(self):
+        prompt = _build_ollama_prompt(
+            "Some German document text", possible_multiple_documents=True
+        )
+        self.assertIn("more than one separate document", prompt)
+        self.assertIn("important_dates", prompt)
+        self.assertIn(document_intelligence.MULTIPLE_DEADLINES_DETECTED_KEY, prompt)
+
+    def test_possible_multiple_documents_hint_only_applies_to_default_prompt(self):
+        # The task-specific mini-prompts have no schema field for this hint
+        # to feed into (see AIService.analyze) - confirm the builder itself
+        # doesn't add it to those even if asked to.
+        for task in ("classification", "extraction", "explanation"):
+            prompt = _build_ollama_prompt("text", task=task, possible_multiple_documents=True)
+            self.assertNotIn("more than one separate document", prompt)
+
     def test_classification_and_extraction_prompts_unchanged(self):
         # Scope guard: only the summary/turkish_explanation-bearing prompts
         # should mention Turkish; the other two tasks don't touch that field.

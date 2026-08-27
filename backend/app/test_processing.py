@@ -4,9 +4,11 @@ from unittest.mock import patch, MagicMock
 
 from .document_processing import (
     MAX_ANALYSIS_TEXT_CHARS,
+    PAGE_SEPARATOR,
     TRUNCATION_HEAD_CHARS,
     TRUNCATION_TAIL_CHARS,
     DocumentProcessingOrchestrator,
+    detect_possible_multiple_documents,
     is_text_truncated_for_analysis,
 )
 from .providers.ollama_provider import OllamaProvider
@@ -21,7 +23,7 @@ class DummyProvider:
     def __init__(self):
         self.calls = 0
 
-    def analyze_document(self, text: str) -> AIAnalysisResult:
+    def analyze_document(self, text: str, **kwargs) -> AIAnalysisResult:
         self.calls += 1
         return AIAnalysisResult(
             document_type='invoice',
@@ -54,7 +56,7 @@ class TestDocumentProcessingOrchestrator(unittest.TestCase):
 
     def test_orchestrator_propagates_error_from_single_call(self):
         class ErrorProvider(DummyProvider):
-            def analyze_document(self, text: str) -> AIAnalysisResult:
+            def analyze_document(self, text: str, **kwargs) -> AIAnalysisResult:
                 self.calls += 1
                 return AIAnalysisResult(error_message='fail')
 
@@ -74,7 +76,7 @@ class SpyProvider(DummyProvider):
         super().__init__()
         self.received_text = None
 
-    def analyze_document(self, text: str) -> AIAnalysisResult:
+    def analyze_document(self, text: str, **kwargs) -> AIAnalysisResult:
         self.received_text = text
         return super().analyze_document(text)
 
@@ -129,6 +131,47 @@ class IsTextTruncatedForAnalysisTestCase(unittest.TestCase):
 
     def test_over_limit_is_truncated(self):
         self.assertTrue(is_text_truncated_for_analysis(MAX_ANALYSIS_TEXT_CHARS + 1))
+
+
+class DetectPossibleMultipleDocumentsTestCase(unittest.TestCase):
+    def test_empty_text_is_not_flagged(self):
+        self.assertFalse(detect_possible_multiple_documents(""))
+
+    def test_ordinary_single_letter_is_not_flagged(self):
+        text = (
+            "Sehr geehrte Damen und Herren,\n\n"
+            "hiermit erhalten Sie Ihre Rechnung Nr. 12345 über 89,00 EUR.\n"
+            "Bitte begleichen Sie die Rechnung bis zum 15.09.2026 auf das "
+            "Konto IBAN DE47 7002 0270 0012 3456 78.\n\n"
+            "Mit freundlichen Grüßen"
+        )
+        self.assertFalse(detect_possible_multiple_documents(text))
+
+    def test_single_signal_alone_is_not_enough(self):
+        # Several real page breaks (a genuinely long single contract) with
+        # no repeating stamp words or IBANs must not be flagged - one
+        # signal alone is too common in legitimate single documents.
+        text = PAGE_SEPARATOR.join([f"Vertragsklausel Nummer {i}." for i in range(5)])
+        self.assertFalse(detect_possible_multiple_documents(text))
+
+    def test_repeating_stamp_word_plus_repeated_iban_is_flagged(self):
+        statement = (
+            "Kontoauszug für den Zeitraum. Neuer Saldo. IBAN DE47 7002 0270 "
+            "0012 3456 78. "
+        )
+        text = statement * 4
+        self.assertTrue(detect_possible_multiple_documents(text))
+
+    def test_real_shape_bundle_is_flagged(self):
+        # Approximates the real production report: a form followed by
+        # several separate Advanzia-style Kontoauszug statements.
+        form = "Antragsformular Crawford & Company. Bitte ausfüllen."
+        statement = (
+            "Kontoauszug Advanzia Bank. Neuer Saldo 6.118,59 EUR. "
+            "IBAN DE47 7002 0270 0012 3456 78."
+        )
+        text = PAGE_SEPARATOR.join([form, statement, statement, statement, statement])
+        self.assertTrue(detect_possible_multiple_documents(text))
 
 
 class TestProviderSelection(unittest.TestCase):

@@ -41,7 +41,7 @@ class DummyAIProvider:
         self.received_text = None
         self.calls = 0
 
-    def analyze_document(self, text: str) -> AIAnalysisResult:
+    def analyze_document(self, text: str, **kwargs) -> AIAnalysisResult:
         self.calls += 1
         self.received_text = text
         return AIAnalysisResult(
@@ -65,7 +65,7 @@ class ErrorAIProvider:
     def __init__(self):
         self.calls = 0
 
-    def analyze_document(self, text: str) -> AIAnalysisResult:
+    def analyze_document(self, text: str, **kwargs) -> AIAnalysisResult:
         self.calls += 1
         return AIAnalysisResult(
             error_message="Simulated provider failure.",
@@ -318,7 +318,7 @@ class DuplicateAIAnalysisPreventionTestCase(unittest.TestCase):
         self.db.commit()
 
         class ExactDeadlineProvider(DummyAIProvider):
-            def analyze_document(self, text: str) -> AIAnalysisResult:
+            def analyze_document(self, text: str, **kwargs) -> AIAnalysisResult:
                 self.calls += 1
                 return AIAnalysisResult(
                     document_type="letter",
@@ -451,7 +451,7 @@ class CorruptedEntityAIProvider:
     def __init__(self):
         self.calls = 0
 
-    def analyze_document(self, text: str) -> AIAnalysisResult:
+    def analyze_document(self, text: str, **kwargs) -> AIAnalysisResult:
         self.calls += 1
         return AIAnalysisResult(
             document_type="letter",
@@ -541,7 +541,7 @@ class HallucinatedSignalAIProvider:
     def __init__(self):
         self.calls = 0
 
-    def analyze_document(self, text: str) -> AIAnalysisResult:
+    def analyze_document(self, text: str, **kwargs) -> AIAnalysisResult:
         self.calls += 1
         raw_response = {
             "document_type": "letter",
@@ -664,7 +664,7 @@ class FreeTextOnlySignalAIProvider:
     def __init__(self):
         self.calls = 0
 
-    def analyze_document(self, text: str) -> AIAnalysisResult:
+    def analyze_document(self, text: str, **kwargs) -> AIAnalysisResult:
         self.calls += 1
         raw_response = {
             "document_type": "Rechnung",
@@ -774,7 +774,7 @@ class EuropaGoVertragsaufhebungAIProvider:
     def __init__(self):
         self.calls = 0
 
-    def analyze_document(self, text: str) -> AIAnalysisResult:
+    def analyze_document(self, text: str, **kwargs) -> AIAnalysisResult:
         self.calls += 1
         raw_response = {
             "document_type": "letter",
@@ -881,7 +881,7 @@ class Check24InsuranceQuoteAIProvider:
     def __init__(self):
         self.calls = 0
 
-    def analyze_document(self, text: str) -> AIAnalysisResult:
+    def analyze_document(self, text: str, **kwargs) -> AIAnalysisResult:
         self.calls += 1
         raw_response = {
             "document_type": "letter",
@@ -1074,7 +1074,7 @@ class JobcenterAenderungsbescheidAIProvider:
     def __init__(self):
         self.calls = 0
 
-    def analyze_document(self, text: str) -> AIAnalysisResult:
+    def analyze_document(self, text: str, **kwargs) -> AIAnalysisResult:
         self.calls += 1
         raw_response = {
             "document_type": "letter",
@@ -1191,7 +1191,7 @@ class MultipleDeadlinesAIProvider:
     def __init__(self):
         self.calls = 0
 
-    def analyze_document(self, text: str) -> AIAnalysisResult:
+    def analyze_document(self, text: str, **kwargs) -> AIAnalysisResult:
         self.calls += 1
         raw_response = {
             "document_type": "letter",

@@ -99,7 +99,7 @@ class OwnershipServiceLayerTestCase(unittest.TestCase):
             provider_name = "dummy"
             model_name = "dummy-model"
 
-            def analyze_document(self, text):
+            def analyze_document(self, text, **kwargs):
                 from .ai_service import AIAnalysisResult
 
                 return AIAnalysisResult(document_type="letter", summary="s")
