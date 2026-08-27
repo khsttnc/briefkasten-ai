@@ -202,6 +202,48 @@ class EntityCountCapTestCase(unittest.TestCase):
         self.assertEqual(len(vehicle_entries), 3)
 
 
+class PlaceholderStringSignalTestCase(unittest.TestCase):
+    """Regression guard for a reported production bug: a provider returned
+    the literal string "null" (not a real JSON null) for deadline_raw_text/
+    document_date/effective_date/action_summary. _is_verifiable_value
+    treated "null" as valid non-empty text, so it was passed to date
+    parsing and logged as an unrelated "unparseable_date" drop instead of
+    being recognized as simply absent - and no such field was even
+    verifiable in the first place, since "null" is never itself a date."""
+
+    def test_string_null_document_date_is_treated_as_absent_not_unparseable(self):
+        raw = {"document_date": "null"}
+        with self.assertNoLogs("briefkasten.entity_validation", level="WARNING"):
+            result = validate_intelligence_signals(raw, KUENDIGUNG_TEXT)
+        self.assertIsNone(result["document_date"])
+
+    def test_string_null_effective_date_is_treated_as_absent(self):
+        raw = {"effective_date": "None"}
+        result = validate_intelligence_signals(raw, KUENDIGUNG_TEXT)
+        self.assertIsNone(result["effective_date"])
+
+    def test_string_null_deadline_raw_text_is_treated_as_absent(self):
+        raw = {"deadline_raw_text": "N/A"}
+        result = validate_intelligence_signals(raw, KUENDIGUNG_TEXT)
+        self.assertIsNone(result["deadline_raw_text"])
+
+    def test_placeholder_action_summary_is_treated_as_absent(self):
+        raw = {"action_summary": "-"}
+        result = validate_intelligence_signals(raw, KUENDIGUNG_TEXT)
+        self.assertIsNone(result["action_summary"])
+
+    def test_placeholder_matching_is_case_and_whitespace_insensitive(self):
+        for placeholder in ["null", "NULL", " Null ", "none", "n/a", "  -  "]:
+            with self.subTest(placeholder=placeholder):
+                raw = {"deadline_raw_text": placeholder}
+                result = validate_intelligence_signals(raw, KUENDIGUNG_TEXT)
+                self.assertIsNone(result["deadline_raw_text"])
+
+    def test_placeholder_explanatory_text_is_treated_as_absent(self):
+        self.assertIsNone(validate_explanatory_text("null", KUENDIGUNG_TEXT))
+        self.assertIsNone(validate_explanatory_text("N/A", KUENDIGUNG_TEXT))
+
+
 class DateTypedExtractedEntityTestCase(unittest.TestCase):
     """extracted_entities date values (see _is_date_type) must be checked
     against the source the same way code/number entities are - not

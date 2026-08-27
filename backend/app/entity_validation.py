@@ -17,6 +17,7 @@ from .document_intelligence import (
     EFFECTIVE_DATE_KEY,
     OUTPUT_LANGUAGE_NAME,
     PAYMENT_REQUESTED_KEY,
+    is_placeholder_string,
 )
 
 # Deliberately logged (not silently dropped) at WARNING - the default level
@@ -119,7 +120,11 @@ def _normalize_alnum(value: str) -> str:
 
 
 def _is_verifiable_value(value: Any) -> bool:
-    return isinstance(value, str) and value.strip() != ""
+    return (
+        isinstance(value, str)
+        and value.strip() != ""
+        and not is_placeholder_string(value)
+    )
 
 
 def _is_date_type(type_key: Optional[str]) -> bool:
@@ -440,7 +445,7 @@ def validate_explanatory_text(
     "turkish_explanation" so the two are distinguishable in the logs,
     since both go through this exact same function.
     """
-    if not isinstance(value, str) or not value.strip():
+    if not isinstance(value, str) or not value.strip() or is_placeholder_string(value):
         return None
 
     text = source_text or ""

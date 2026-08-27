@@ -40,6 +40,34 @@ class MissingOrEmptyInputTestCase(unittest.TestCase):
         self.assertEqual(fields["priority_level"], "low")
 
 
+class PlaceholderStringSignalTestCase(unittest.TestCase):
+    """Regression guard for a reported production bug: a provider returned
+    the literal string "null" (not a real JSON null) for action_summary and
+    deadline_raw_text. _safe_str treated it as valid non-empty text, so
+    "null" flowed all the way to the reader/deadline_engine instead of
+    being recognized as an absent value."""
+
+    def test_string_null_sender_category_is_treated_as_absent(self):
+        fields = derive_intelligence_fields({"sender_category": "null"})
+        self.assertIsNone(fields["sender_category"])
+
+    def test_string_null_is_case_and_whitespace_insensitive(self):
+        for placeholder in ["null", "NULL", " Null ", "none", "N/A", "n/a", "-", "  -  "]:
+            with self.subTest(placeholder=placeholder):
+                fields = derive_intelligence_fields({"classified_document_type": placeholder})
+                self.assertIsNone(fields["document_type"])
+
+    def test_string_null_action_summary_is_treated_as_absent(self):
+        fields = derive_intelligence_fields({"action_summary": "null"})
+        self.assertIsNone(fields["action_summary"])
+
+    def test_genuine_value_resembling_but_not_matching_placeholder_is_kept(self):
+        # Must not over-match: "n/a" only matches the whole (stripped)
+        # value, not text that merely contains it.
+        fields = derive_intelligence_fields({"sender_category": "n/a Versicherung"})
+        self.assertEqual(fields["sender_category"], "n/a Versicherung")
+
+
 class MalformedSignalTypesTestCase(unittest.TestCase):
     """Wrong-typed values for a signal key must be treated as absent, not
     raise or get coerced into something misleading."""

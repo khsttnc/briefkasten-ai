@@ -178,8 +178,28 @@ def _truncation_action_summary_note() -> str:
     )
 
 
+# Stringified-null placeholders some providers emit instead of a real JSON
+# null when a field genuinely has no value (observed in production:
+# action_summary/deadline_raw_text coming back as the literal text "null").
+# Treating these as real content let "null" flow into deadline_raw_text/
+# document_date/effective_date, where it then failed date parsing and
+# surfaced as an unrelated-looking "unparseable_date" validation drop
+# instead of being recognized as simply absent. Matched case-insensitively
+# and whitespace-tolerant since the exact casing/padding isn't consistent
+# across providers/models.
+_PLACEHOLDER_STRING_VALUES = {"null", "none", "n/a", "na", "-", "nil", "undefined"}
+
+
+def is_placeholder_string(value: Any) -> bool:
+    """True for a string that is itself a stand-in for "no value" (e.g. the
+    literal text "null") rather than real content. Shared with
+    entity_validation._is_verifiable_value so both input-sanitization
+    boundaries agree on what counts as an absent value."""
+    return isinstance(value, str) and value.strip().lower() in _PLACEHOLDER_STRING_VALUES
+
+
 def _safe_str(value: Any) -> Optional[str]:
-    if isinstance(value, str) and value.strip():
+    if isinstance(value, str) and value.strip() and not is_placeholder_string(value):
         return value
     return None
 
